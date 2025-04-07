@@ -6,58 +6,68 @@ const os = require('os');
 require('dotenv').config(); // Load .env variables
 
 // --- OpenAI Setup ---
+// ... (keep existing OpenAI setup code) ...
 const OpenAI = require('openai');
 
 if (!process.env.OPENAI_API_KEY) {
     console.error("FATAL ERROR: OPENAI_API_KEY not found in .env file.");
-    // In a real app, show an error dialog to the user before quitting
-    // Consider using dialog.showErrorBox('Error', 'OpenAI API Key is missing...');
     app.quit();
-    process.exit(1); // Ensure exit if app.quit() is asynchronous
+    process.exit(1);
 }
-
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
+// --- END OpenAI Setup ---
+
 
 function createWindow() {
     const mainWindow = new BrowserWindow({
-        width: 480, // Adjusted width slightly
-        height: 180, // Adjusted height to accommodate text better
+        // --- Dictation Mode Window Settings ---
+        width: 380,              // Reduced width
+        height: 75,              // Reduced height (enough for bar + transcription text above)
+        frame: false,            // Remove window frame (title bar, etc.)
+        resizable: false,        // Prevent resizing
+        alwaysOnTop: true,       // Keep it above other windows (optional, but common for widgets)
+        // --- End Dictation Mode Settings ---
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true, // Recommended: true
-            nodeIntegration: false, // Recommended: false
-            devTools: !app.isPackaged, // Enable DevTools only when not packaged
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: !app.isPackaged, // Keep this for development debugging
         }
     });
 
     mainWindow.loadFile('index.html');
 
-    // Open DevTools automatically if not packaged
+    // Open DevTools automatically if not packaged (Keep this for development!)
     if (!app.isPackaged) {
         mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
+
+    // Optional: If you want the window to be draggable even without a frame
+    // You'd need to add a CSS class like 'draggable-area' to an element in index.html (e.g., the main bar)
+    // and uncomment the line below in style.css
+    // mainWindow.webContents.on('dom-ready', () => {
+    //     mainWindow.webContents.insertCSS('-webkit-app-region: drag; -webkit-user-select: none;');
+    // });
 }
 
 app.whenReady().then(() => {
     createWindow();
 
     app.on('activate', function () {
-        // On macOS it's common to re-create a window in the app when the
-        // dock icon is clicked and there are no other windows open.
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
 });
 
 app.on('window-all-closed', function () {
-    // Quit when all windows are closed, except on macOS.
     if (process.platform !== 'darwin') app.quit();
 });
 
 // --- IPC Handler for Transcription ---
-// Listens for 'transcribe-audio' event from the renderer process
+// ... (keep existing IPC handler code) ...
 ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
+    // ... (no changes needed here) ...
     console.log('Main: Received audio data for transcription.');
 
     if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
@@ -66,13 +76,11 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
     }
 
     // 1. Save buffer to a temporary file (OpenAI SDK prefers files)
-    //    Whisper is good with many formats, webm/opus is generally fine.
-    const tempFileName = `openai-audio-${Date.now()}.webm`; // Assume webm, adjust if mime type is passed
+    const tempFileName = `openai-audio-${Date.now()}.webm`; // Assume webm
     const tempFilePath = path.join(os.tmpdir(), tempFileName);
     let fileWritten = false;
 
     try {
-        // Convert the incoming Uint8Array (marshalled by IPC) to a Node.js Buffer
         const nodeBuffer = Buffer.from(audioDataUint8Array);
 
         if (nodeBuffer.length === 0) {
@@ -87,39 +95,35 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         console.log('Main: Sending audio to OpenAI Whisper API...');
         const transcription = await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempFilePath),
-            model: 'whisper-1', // Or another Whisper model if needed
-            // language: "en", // Optional: Specify language ISO-639-1 code
-            // prompt: "...", // Optional: Guide the model with expected phrases/context
+            model: 'whisper-1',
         });
 
         console.log('Main: Transcription successful:', transcription.text);
 
-        // 3. Return the result (cleanup happens in finally)
+        // 3. Return the result
         return { text: transcription.text };
 
     } catch (error) {
         console.error('Main: Error during transcription process:', error);
-        // Attempt to parse OpenAI specific errors if available
         let errorMessage = 'Unknown transcription error occurred.';
         if (error instanceof OpenAI.APIError) {
-            // Log more details for OpenAI errors
             console.error(`OpenAI API Error Details: Status=${error.status}, Type=${error.type}, Code=${error.code}`);
             errorMessage = `OpenAI Error (${error.status}): ${error.message}`;
         } else if (error instanceof Error) {
-            errorMessage = error.message; // Standard JS error
+            errorMessage = error.message;
         }
         return { error: errorMessage };
 
     } finally {
-        // 4. Clean up the temporary file if it was written
+        // 4. Clean up the temporary file
         if (fileWritten) {
             try {
                 await fs.promises.unlink(tempFilePath);
                 console.log(`Main: Deleted temporary file ${tempFilePath}`);
             } catch (unlinkErr) {
-                // Log deletion error but don't prevent response from being sent
                 console.error(`Main: Failed to delete temporary file ${tempFilePath}:`, unlinkErr);
             }
         }
     }
 });
+// --- END IPC Handler ---

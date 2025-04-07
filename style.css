@@ -1,45 +1,51 @@
 /* --- General Styles --- */
 body {
-    background-color: #222;
+    background-color: transparent; /* Make body transparent for frameless window */
     color: #eee;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; /* System font stack */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
     justify-content: center;
-    align-items: center;
-    min-height: 100vh;
+    align-items: flex-end; /* Align recorder to the bottom of the small window */
+    height: 100vh; /* Use viewport height */
     margin: 0;
-    overflow: hidden; /* Prevent scrollbars */
-    -webkit-font-smoothing: antialiased; /* Better font rendering */
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    padding: 5px; /* Add slight padding around the edges */
+    box-sizing: border-box;
 }
 
 .audio-recorder {
-    width: 95%; /* Use percentage for better scaling */
-    max-width: 420px; /* Max width */
-    min-width: 300px; /* Min width */
-    height: 50px; /* Height of the main bar */
-    position: relative; /* Crucial for positioning children */
+    width: 100%; /* Take full width of the padded body */
+    height: 45px; /* Slightly reduced height for the main bar */
+    position: relative;
     box-sizing: border-box;
-    margin-top: 30px; /* Add margin to prevent transcription text cutoff at top */
+    /* Remove margin-top, alignment handled by body */
 }
 
 /* --- State Containers --- */
-/* Base styles for the pill bar shape and content alignment */
 .recorder-state {
     background-color: #444;
-    border-radius: 25px; /* Pill shape */
+    border-radius: 22.5px; /* Keep pill shape (height/2) */
     height: 100%;
     width: 100%;
     box-sizing: border-box;
-    display: flex; /* Use flex for content alignment */
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 5px 10px;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); /* Subtle shadow */
+    padding: 4px 8px; /* Slightly reduced padding */
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); /* Adjusted shadow */
+    /* If you want to make the bar draggable (uncomment in main.js too) */
+    /* -webkit-app-region: drag; */
 }
 
+/* Make buttons non-draggable if the bar is draggable */
+/* .icon-button, .mic-icon-svg {
+    -webkit-app-region: no-drag;
+} */
+
+
 /* --- Visibility Control --- */
-/* Hide all specific state containers by default */
 .idle-state,
 .recording-state,
 .processing-view {
@@ -47,176 +53,132 @@ body {
     width: 100%;
     height: 100%;
 }
-
-/* Show the ACTIVE state based on parent data-state */
-.audio-recorder[data-state="idle"] .idle-state {
-    display: flex;
-}
-.audio-recorder[data-state="recording"] .recording-state {
-    display: flex;
-}
-.audio-recorder[data-state="processing"] .processing-view {
-    display: block; /* Show the wrapper */
-    height: 100%; /* Take full height */
-    width: 100%;  /* Take full width */
-}
+.audio-recorder[data-state="idle"] .idle-state { display: flex; }
+.audio-recorder[data-state="recording"] .recording-state { display: flex; }
+.audio-recorder[data-state="processing"] .processing-view { display: block; height: 100%; width: 100%; }
 
 /* --- Idle State --- */
 .idle-state {
-    justify-content: flex-end; /* Push mic icon to the right */
-    padding-right: 15px; /* Space for the icon */
+    justify-content: flex-end;
+    padding-right: 10px; /* Reduced space */
 }
 .mic-icon-svg {
-    width: 28px;
-    height: 28px;
+    width: 24px; /* Slightly smaller icon */
+    height: 24px;
     fill: #AAAAAA;
     cursor: pointer;
     transition: fill 0.2s ease, transform 0.1s ease;
 }
-.mic-icon-svg:hover {
-    fill: #CCCCCC;
-}
-.mic-icon-svg:active {
-    transform: scale(0.9);
-}
+.mic-icon-svg:hover { fill: #CCCCCC; }
+.mic-icon-svg:active { transform: scale(0.9); }
 
 /* --- Recording State --- */
 .recording-state .waveform-canvas {
     flex-grow: 1;
-    height: 40px; /* Height within the bar */
-    margin: 0 10px;
-    min-width: 50px; /* Prevent collapsing */
+    height: 35px; /* Reduced canvas height */
+    margin: 0 8px; /* Adjusted margin */
+    min-width: 40px;
 }
 .recording-state .timer {
     color: white;
-    font-size: 0.9em;
-    font-variant-numeric: tabular-nums; /* Monospace numbers */
-    /* Position absolute to overlay slightly if needed, relative to recording-state */
+    font-size: 0.8em; /* Smaller font */
+    font-variant-numeric: tabular-nums;
     position: absolute;
-    right: 65px; /* Position near confirm button */
+    right: 55px; /* Adjusted position */
     top: 50%;
     transform: translateY(-50%);
-    background-color: rgba(0, 0, 0, 0.4); /* Darker overlay */
-    padding: 2px 5px;
+    background-color: rgba(0, 0, 0, 0.5); /* Slightly darker overlay */
+    padding: 1px 4px; /* Adjusted padding */
     border-radius: 3px;
-    pointer-events: none; /* Don't block clicks */
-    z-index: 2; /* Above canvas */
+    pointer-events: none;
+    z-index: 2;
 }
 .recording-state .icon-button {
-    width: 40px;
-    height: 40px;
+    width: 32px; /* Smaller icons */
+    height: 32px;
     flex-shrink: 0;
     cursor: pointer;
-    margin: 0 3px; /* Add small margin */
+    margin: 0 2px; /* Adjusted margin */
     transition: transform 0.1s ease;
 }
-.recording-state .icon-button circle {
-     transition: fill 0.2s ease;
-}
-.recording-state .cancel-button:hover circle {
-     fill: #777; /* Darker gray for cancel hover */
-}
-.recording-state .confirm-button:hover circle {
-     fill: #f0f0f0; /* Lighter gray for confirm hover */
-}
-.recording-state .icon-button:active {
-    transform: scale(0.9);
-}
-
+.recording-state .icon-button circle { transition: fill 0.2s ease; }
+.recording-state .cancel-button:hover circle { fill: #777; }
+.recording-state .confirm-button:hover circle { fill: #f0f0f0; }
+.recording-state .icon-button:active { transform: scale(0.9); }
 
 /* --- Processing State View --- */
-/* This container holds the text and the bar */
 .processing-view {
-    position: relative; /* Allows absolute positioning of text relative to this */
+    position: relative;
     width: 100%;
-    height: 100%; /* Ensures it takes up the space */
+    height: 100%;
 }
 
 .transcription-text {
-    color: #bbb; /* Lighter default color */
-    font-size: 0.95em;
+    color: #ccc; /* Maintain color */
+    font-size: 0.85em; /* Smaller font */
     text-align: center;
-    white-space: normal; /* Allow wrapping */
-    overflow-wrap: break-word; /* Break long words */
-    position: absolute; /* Position relative to audio-recorder container */
-    bottom: calc(100% + 8px); /* Place it above the component's top */
+    white-space: normal;
+    overflow-wrap: break-word;
+    position: absolute;
+    bottom: calc(100% + 5px); /* Place just above the recorder bar */
     left: 50%;
     transform: translateX(-50%);
-    width: 90%; /* Limit width, allow wrapping */
-    max-width: 380px;
-    background-color: #2a2a2a; /* Slightly different bg */
-    padding: 6px 10px;
-    border-radius: 6px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    z-index: 10; /* Above other elements */
-    min-height: 1.2em; /* Ensure space even when empty */
-    line-height: 1.4;
-    opacity: 0; /* Start hidden */
-    transition: opacity 0.3s ease-in-out; /* Fade transition */
-    pointer-events: none; /* Don't block interactions below */
+    width: 95%; /* Wider relative to the small window */
+    max-width: 360px; /* Limit max width */
+    background-color: rgba(42, 42, 42, 0.9); /* Slightly transparent background */
+    padding: 5px 8px; /* Adjusted padding */
+    border-radius: 5px; /* Slightly smaller radius */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    z-index: 10;
+    min-height: 1.2em;
+    line-height: 1.3; /* Slightly tighter line height */
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+    pointer-events: none;
 }
-/* Show transcription text when state is processing or recently idle */
 .audio-recorder[data-state="processing"] .transcription-text,
 .audio-recorder[data-state="idle"].show-transcription .transcription-text {
     opacity: 1;
 }
-
-/* Error styling for transcription text */
 .transcription-text.error {
-    color: #ffcccc; /* Light red for errors */
-    background-color: #5c3333; /* Dark red background */
+    color: #ffcccc;
+    background-color: rgba(92, 51, 51, 0.9); /* Dark red background with alpha */
 }
-/* Success styling for transcription text (optional, if needed) */
-/* .transcription-text.success {
-    color: #ccffcc;
-    background-color: #335c33;
-} */
 
-/* This is the actual pill bar for processing state */
+/* Processing Bar specific adjustments */
 .processing-bar {
-    /* Inherits .recorder-state styles (background, border-radius, height, flex, etc.) */
-    width: 100%; /* Ensure it fills the .processing-view horizontal space */
+    width: 100%;
     height: 100%;
 }
 .processing-bar .waveform-canvas {
     flex-grow: 1;
-    height: 40px;
-    margin: 0 10px;
-    min-width: 50px;
+    height: 35px; /* Match recording canvas height */
+    margin: 0 8px;
+    min-width: 40px;
 }
 .processing-bar .total-duration {
      color: white;
-     font-size: 0.9em;
+     font-size: 0.8em; /* Smaller font */
      font-variant-numeric: tabular-nums;
-     margin-left: 5px;
-     margin-right: 5px;
+     margin-left: 4px;
+     margin-right: 4px;
      flex-shrink: 0;
 }
 .processing-bar .spinner-svg {
-    width: 24px;
-    height: 24px;
+    width: 20px; /* Smaller spinner */
+    height: 20px;
     animation: spin 1.2s linear infinite;
     flex-shrink: 0;
-    margin-left: 10px; /* Space before spinner */
-    margin-right: 5px;  /* Space after spinner */
+    margin-left: 8px;
+    margin-right: 4px;
 }
 
-/* Refined Spinner Animation */
+/* Spinner Animation (no changes needed) */
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
-.spinner-svg g {
-    transform-origin: center center; /* Ensure rotation is centered */
-}
-.spinner-svg circle { /* Using circles for a common spinner look */
-    fill: #ccc;
-}
-
-/* Use circles for spinner */
-.spinner-svg g {
-    transform: translate(50 50); /* Adjust origin if using the circle code */
-}
-.spinner-svg circle {
-   /* Attributes will be set in HTML */
-}
+.spinner-svg g { transform-origin: center center; }
+.spinner-svg circle { fill: #ccc; }
+.spinner-svg g { transform: translate(50 50); }
+.spinner-svg circle { /* Attributes set in HTML */ }
