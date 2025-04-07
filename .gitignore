@@ -1,1 +1,16 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Build artifacts (optional, good practice)
+dist/
+out/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# User existing ignore
 .kaichats

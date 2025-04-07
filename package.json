@@ -1,0 +1,25 @@
+{
+  "name": "electron-recorder-transcriber",
+  "version": "1.0.0",
+  "description": "Electron app with audio recorder and OpenAI Whisper transcription",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "electron",
+    "audio",
+    "recorder",
+    "openai",
+    "whisper",
+    "transcription"
+  ],
+  "author": "Your Name",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "electron": "^28.1.0",
+    "openai": "^4.24.1"
+  }
+}

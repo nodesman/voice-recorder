@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Security Policy: Allow self, inline styles/scripts (adjust if needed) -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+    <title>Audio Recorder & Transcriber</title>
+    <link rel="stylesheet" href="style.css"> <!-- Link the CSS -->
+</head>
+<body>
+
+    <!-- The exact same recorder structure from recorder.html -->
+    <div class="audio-recorder" data-state="idle">
+
+        <div class="recorder-state idle-state">
+            <svg class="mic-icon-svg" id="micButton" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12,14c1.66,0,3-1.34,3-3V5c0-1.66-1.34-3-3-3S9,3.34,9,5v6C9,12.66,10.34,14,12,14z M17,11c0,2.76-2.24,5-5,5 s-5-2.24-5-5H5c0,3.53,2.61,6.43,6,6.92V21h2v-3.08c3.39-0.49,6-3.39,6-6.92H17z"/>
+            </svg>
+        </div>
+
+        <div class="recorder-state recording-state">
+            <svg class="icon-button cancel-button" id="cancelButton" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="50" cy="50" r="48" fill="#555555"/>
+              <line x1="30" y1="30" x2="70" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
+              <line x1="70" y1="30" x2="30" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
+            </svg>
+            <canvas class="waveform-canvas" id="recordingWaveformCanvas" width="400" height="80"></canvas>
+            <span class="timer" id="timerDisplay">0:00</span>
+            <svg class="icon-button confirm-button" id="confirmButton" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="50" cy="50" r="48" fill="white"/>
+              <polyline points="30,50 45,65 70,35" fill="none" stroke="#333333" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </div>
+
+        <div class="processing-view">
+             <div class="transcription-text" id="transcriptionDisplay">Processing...</div>
+             <div class="recorder-state processing-bar">
+                 <canvas class="waveform-canvas" id="processingWaveformCanvas" width="400" height="80"></canvas>
+                 <span class="total-duration" id="totalDurationDisplay">0:00</span>
+                 <svg class="spinner-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                   <g transform="translate(50 50)">
+                     <circle cx="0" cy="-40" r="6" fill="white" />
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(45)" opacity="0.875"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(90)" opacity="0.75"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(135)" opacity="0.625"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(180)" opacity="0.5"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(225)" opacity="0.375"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(270)" opacity="0.25"/>
+                     <circle cx="0" cy="-40" r="6" fill="white" transform="rotate(315)" opacity="0.125"/>
+                   </g>
+                 </svg>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Link the Renderer JavaScript -->
+    <script src="renderer.js"></script>
+</body>
+</html>
