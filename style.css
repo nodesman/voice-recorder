@@ -39,21 +39,20 @@ body {
     justify-content: space-between;
     padding: 4px 8px; /* Keep padding inside the pill */
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    /* If you want to make the bar draggable (uncomment in main.js too) */
-    /* -webkit-app-region: drag; */
+    /* Make the bar draggable */
+    -webkit-app-region: drag;
 }
 
 /* Make buttons non-draggable if the bar is draggable */
-/* .icon-button, .mic-icon-svg {
+.icon-button, .mic-icon-svg {
     -webkit-app-region: no-drag;
-} */
+}
 
 
 /* --- Visibility Control --- */
 /* Hide all states by default */
 .idle-state,
-.recording-state,
-.processing-view {
+.recording-state {
     display: none;
     width: 100%;
     /* Height is determined by content now, removing fixed height */
@@ -61,7 +60,7 @@ body {
 /* Show the active state based on the data-state attribute */
 .audio-recorder[data-state="idle"] .idle-state { display: flex; }
 .audio-recorder[data-state="recording"] .recording-state { display: flex; }
-.audio-recorder[data-state="processing"] .processing-view { display: block; position: relative; } /* Ensure processing-view establishes stacking context */
+/* Removed processing state visibility */
 
 
 /* --- Idle State --- */
@@ -89,6 +88,7 @@ body {
     height: 35px; /* Reduced canvas height */
     margin: 0 8px; /* Adjusted margin */
     min-width: 40px;
+    -webkit-app-region: no-drag; /* Ensure canvas isn't draggable */
 }
 .recording-state .timer {
     color: white;
@@ -103,6 +103,7 @@ body {
     border-radius: 3px;
     pointer-events: none;
     z-index: 2;
+    -webkit-app-region: no-drag; /* Ensure timer overlay isn't draggable */
 }
 .recording-state .icon-button {
     width: 32px; /* Smaller icons */
@@ -117,79 +118,4 @@ body {
 .recording-state .confirm-button:hover circle { fill: #f0f0f0; }
 .recording-state .icon-button:active { transform: scale(0.9); }
 
-/* --- Processing State View --- */
-/* .processing-view itself is just a container */
-
-.transcription-text {
-    color: #ccc; /* Maintain color */
-    font-size: 0.85em; /* Smaller font */
-    text-align: center;
-    white-space: normal;
-    overflow-wrap: break-word;
-    position: absolute; /* Position relative to .processing-view */
-    bottom: calc(100% + 5px); /* Place just above the recorder bar */
-    left: 50%;
-    transform: translateX(-50%);
-    /* Adjust width relative to the recorder, not the full window */
-    width: calc(100% - 10px); /* Slightly less than recorder width */
-    max-width: 360px; /* Keep max width limit */
-    background-color: rgba(42, 42, 42, 0.9);
-    padding: 5px 8px;
-    border-radius: 5px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-    z-index: 10;
-    min-height: 1.2em;
-    line-height: 1.3;
-    opacity: 0;
-    transition: opacity 0.3s ease-in-out;
-    pointer-events: none;
-}
-/* Show transcription text when processing or explicitly told to show */
-.audio-recorder[data-state="processing"] .transcription-text,
-.audio-recorder[data-state="idle"].show-transcription .transcription-text {
-    opacity: 1;
-}
-.transcription-text.error {
-    color: #ffcccc;
-    background-color: rgba(92, 51, 51, 0.9); /* Dark red background with alpha */
-}
-
-/* --- Processing Bar (Uses .recorder-state) --- */
-/* Select the .recorder-state specifically within the processing view if needed,
-   but usually the base .recorder-state styles are sufficient.
-   The class .processing-bar is added in HTML for potential specific targeting. */
-.processing-bar {
-     /* .recorder-state styles apply */
-}
-.processing-bar .waveform-canvas {
-    flex-grow: 1;
-    height: 35px; /* Match recording canvas height */
-    margin: 0 8px;
-    min-width: 40px;
-}
-.processing-bar .total-duration {
-     color: white;
-     font-size: 0.8em; /* Smaller font */
-     font-variant-numeric: tabular-nums;
-     margin-left: 4px;
-     margin-right: 4px;
-     flex-shrink: 0;
-}
-.processing-bar .spinner-svg {
-    width: 20px; /* Smaller spinner */
-    height: 20px;
-    animation: spin 1.2s linear infinite;
-    flex-shrink: 0;
-    margin-left: 8px;
-    margin-right: 4px;
-}
-
-/* Spinner Animation (no changes needed) */
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-.spinner-svg g { transform-origin: center center; }
-.spinner-svg circle { fill: #ccc; }
-.spinner-svg g { transform: translate(50 50); }
-.spinner-svg circle { /* Attributes set in HTML */ }
+/* Processing State View and Processing Bar styles removed */

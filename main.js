@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron'); // <-- Import globalShortcut
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron'); // <-- Import globalShortcut & dialog
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,32 +11,56 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 // --- END NEW ---
 
+// --- NEW: Import robotjs ---
+let robot = null;
+try {
+    robot = require('robotjs');
+    console.log("Main: robotjs loaded successfully.");
+} catch (e) {
+    console.error("FATAL ERROR: Failed to load robotjs. Automatic pasting will not work.");
+    console.error("Ensure robotjs is installed correctly (npm install robotjs) and build tools are available.");
+    // We need to show this error *after* app is ready
+    app.on('ready', () => {
+        dialog.showErrorBox("Initialization Error", "Failed to load core component (robotjs) required for pasting text. Please check installation and system dependencies. The application will exit.");
+        app.quit();
+    });
+}
+// --- END NEW ---
+
 // --- OpenAI Setup ---
 const OpenAI = require('openai');
 
 if (!process.env.OPENAI_API_KEY) {
     console.error("FATAL ERROR: OPENAI_API_KEY not found in .env file.");
-    app.quit();
-    process.exit(1);
+    // Show error after app is ready
+    app.on('ready', () => {
+        dialog.showErrorBox("Configuration Error", "OpenAI API Key is missing. Please set OPENAI_API_KEY in the .env file. The application will exit.");
+        app.quit();
+    });
 }
-const openai = new OpenAI({
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-});
+}) : null; // Initialize only if key exists
 // --- END OpenAI Setup ---
 
 let mainWindow = null; // <-- Keep a reference accessible outside createWindow
 
 function createWindow() {
     // Create the browser window but don't show it yet.
-    mainWindow = new BrowserWindow({ // <-- Assign to the outer mainWindow
+    mainWindow = new BrowserWindow({
         width: 380,
-        height: 75, // Keep enough height for the recorder + potential transcription pop-up space
+        // Adjust height slightly if needed, depends on final UI element sizes
+        height: 65, // Reduced height slightly as transcription text box is gone
         frame: false,
         resizable: false,
         alwaysOnTop: true,
         show: false, // <--- Start hidden
-        skipTaskbar: true, // <-- Don't show in taskbar (Windows/Linux)
-        transparent: true, // <--- ADD THIS LINE TO MAKE THE WINDOW BACKGROUND TRANSPARENT
+        skipTaskbar: true,
+        transparent: true,
+        // --- NEW: Enable dragging via transparent window (might not be needed with CSS drag region) ---
+        // Tabbing focuses elements within the window rather than moving focus away
+        acceptFirstMouse: true, // Helps with clicking immediately after showing
+        // --- END NEW ---
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -47,129 +71,156 @@ function createWindow() {
 
     mainWindow.loadFile('index.html');
 
-    // Optional: Open DevTools automatically if not packaged (only when window is shown)
-    // mainWindow.webContents.on('did-finish-load', () => {
-    //     if (!app.isPackaged) {
-    //         // Delay opening DevTools slightly until the window is potentially shown
-    //         // Or, open it only when shown via shortcut (more complex)
-    //     }
-    // });
-
     // Dereference the window object when the window is closed
     mainWindow.on('closed', () => {
         mainWindow = null;
     });
 
-     // Optionally hide the window when it loses focus (blur event)
+     // Hide the window when it loses focus
      mainWindow.on('blur', () => {
-         // Blur behavior might need adjustment with transparent windows,
-         // especially on Linux. Test thoroughly.
          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
               console.log("Window blurred, hiding.");
+              // Tell renderer to stop recording if it's active when blurred
+              mainWindow.webContents.send('trigger-stop-recording', false); // false = don't save/process (cancel)
               mainWindow.hide();
-              // if (process.platform === 'darwin') { app.hide(); } // Keep commented unless needed
          }
      });
 }
 
 // --- App Lifecycle ---
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
 app.whenReady().then(() => {
-    // Hide the Dock icon on macOS
+    // Exit now if critical components failed to load earlier
+    if (!robot || !openai) {
+        console.error("Exiting due to initialization errors (robotjs or OpenAI key).");
+        // Error dialogs shown via app.on('ready') handlers
+        return; // Stop further initialization
+    }
+
     if (process.platform === 'darwin') {
         app.dock.hide();
     }
 
-    createWindow(); // Create the (hidden) window
+    createWindow();
 
     // Register a global shortcut listener.
     const ret = globalShortcut.register('CmdOrCtrl+Shift+R', () => {
-        console.log('CmdOrCtrl+Shift+R is pressed');
+        console.log('Shortcut CmdOrCtrl+Shift+R pressed');
         if (mainWindow) {
             if (mainWindow.isVisible() && mainWindow.isFocused()) {
-                // If visible and focused, hide it
-                mainWindow.hide();
-                 // Optional: Hide the entire app on macOS when explicitly hidden
-                 // if (process.platform === 'darwin') {
-                 //     app.hide();
-                 // }
+                console.log("Main: Window visible and focused, stopping recording (if active) and hiding.");
+                // Tell renderer to stop recording if active, *then* hide
+                mainWindow.webContents.send('trigger-stop-recording', true); // true = save and process
+                // Hiding will now happen *after* processing in the renderer via hideWindow()
             } else {
-                // Otherwise, show and focus it
+                console.log("Main: Window not visible or not focused, showing and triggering record.");
+                // Show and focus first
                 mainWindow.show();
                 mainWindow.focus();
-                 // If you used app.hide() on macOS, you might need app.show() here too.
+                 // --- NEW: Send message to renderer to start recording ---
+                 // Use setTimeout to ensure window is fully visible and focused before triggering
+                 setTimeout(() => {
+                    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) { // Extra check
+                       console.log("Main: Sending trigger-start-recording to renderer.");
+                       mainWindow.webContents.send('trigger-start-recording');
+                    } else {
+                        console.log("Main: Window closed or hidden before start trigger could be sent.");
+                    }
+                 }, 100); // Increased delay slightly
+                 // --- END NEW ---
             }
         } else {
-            // If window was closed, maybe recreate it?
-            console.log("Main: Shortcut triggered but mainWindow is null.");
-            // createWindow(); // Uncomment to recreate if window was destroyed
+            console.log("Main: Shortcut triggered but mainWindow is null. Recreating.");
+            createWindow(); // Recreate if window was destroyed
+             // Show and focus immediately after recreation
+             if (mainWindow) {
+                 mainWindow.once('ready-to-show', () => { // Wait until loaded
+                     mainWindow.show();
+                     mainWindow.focus();
+                     // Trigger recording after showing
+                     setTimeout(() => {
+                        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                           console.log("Main: Sending trigger-start-recording to renderer after recreation.");
+                           mainWindow.webContents.send('trigger-start-recording');
+                        }
+                     }, 100);
+                 });
+             }
         }
     });
 
     if (!ret) {
         console.error('Main: globalShortcut registration failed');
+        dialog.showErrorBox("Error", "Failed to register global shortcut (CmdOrCtrl+Shift+R). Is another application using it?");
+        // Optionally quit if shortcut is essential
+        // app.quit();
     } else {
         console.log('Main: globalShortcut CmdOrCtrl+Shift+R registered successfully.');
     }
 
-    // Note: The 'activate' event handler might not be relevant anymore
-    // since the Dock icon is hidden on macOS. We remove it or comment it out.
-    // app.on('activate', function () {
-    //     // On macOS it's common to re-create a window in the app when the
-    //     // dock icon is clicked and there are no other windows open.
-    //     if (BrowserWindow.getAllWindows().length === 0) {
-    //        // Since window starts hidden, maybe don't recreate here automatically
-    //        // createWindow();
-    //     } else if (mainWindow && !mainWindow.isVisible()) {
-    //         // Don't automatically show on activate if it was hidden
-    //         // mainWindow.show();
-    //         // mainWindow.focus();
-    //     }
-    // });
 });
 
-// Quit when all windows are closed, except on macOS.
+// Quit when all windows are closed
 app.on('window-all-closed', function () {
-    // We might reach here if the window is closed via DevTools or programmatically.
-    // Since we only have one hidden window, closing it should probably quit the app
-    // unless we intend to recreate it with the shortcut.
-    // The current behavior (quit unless darwin) is probably fine.
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-// Unregister shortcuts when the application is about to quit.
+// Unregister shortcuts when quitting
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     console.log('Main: Unregistered all global shortcuts.');
 });
 
+// --- NEW: IPC Handler to Hide Window from Renderer ---
+ipcMain.on('hide-window', () => {
+    console.log("Main: Received hide-window request from renderer.");
+    if (mainWindow && mainWindow.isVisible()) {
+        mainWindow.hide();
+    }
+});
+// --- END NEW ---
+
 
 // --- IPC Handler for Transcription ---
-// (Keep the existing ipcMain.handle('transcribe-audio', ...) handler as is)
 ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
     console.log('Main: Received audio data for transcription.');
+    // Return status structure: { success: boolean, error?: string }
+    let operationStatus = { success: false, error: null };
+
+    // These checks should ideally prevent reaching here if failed, but double-check
+    if (!robot) {
+         const errorMsg = "robotjs module not loaded. Cannot paste transcription.";
+         console.error("Main:", errorMsg);
+         // Dialog was shown on startup, just return error status
+         operationStatus.error = errorMsg;
+         return operationStatus;
+    }
+    if (!openai) {
+        const errorMsg = "OpenAI API key not configured. Cannot transcribe.";
+        console.error("Main:", errorMsg);
+        // Dialog was shown on startup, just return error status
+        operationStatus.error = errorMsg;
+        return operationStatus;
+    }
 
     if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
-        console.error('Main: No audio data received or buffer is empty.');
-        return { error: 'No audio data received by main process.' };
+        console.error('Main: No audio data received.');
+        operationStatus.error = 'No audio data received by main process.';
+        return operationStatus;
     }
 
     // --- File Paths ---
     const timestamp = Date.now();
-    const tempFileNameWebm = `openai-audio-input-${timestamp}.webm`;
-    const tempFileNameMp3 = `openai-audio-output-${timestamp}.mp3`;
+    const tempFileNameWebm = `rec-input-${timestamp}.webm`;
+    const tempFileNameMp3 = `rec-output-${timestamp}.mp3`;
     const tempFilePathWebm = path.join(os.tmpdir(), tempFileNameWebm);
     const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3);
     // --- End File Paths ---
 
     let webmFileWritten = false;
     let mp3FileCreated = false;
-    let webmFileSize = 0; // Variable to store webm size
-    let mp3FileSize = 0;  // Variable to store mp3 size
 
     try {
         // 1. Save original buffer to a temporary .webm file
@@ -179,95 +230,122 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         }
         await fs.promises.writeFile(tempFilePathWebm, nodeBuffer);
         webmFileWritten = true;
-
-        // --- Get and log original WebM file size ---
-        try {
-            const webmStats = await fs.promises.stat(tempFilePathWebm);
-            webmFileSize = webmStats.size;
-            console.log(`Main: Original audio saved to ${tempFilePathWebm} (Size: ${webmFileSize} bytes)`);
-        } catch (statError) {
-             console.warn(`Main: Could not get stats for temporary webm file ${tempFilePathWebm}: ${statError.message}`);
-        }
-        // --- End WebM size logging ---
+        console.log(`Main: Original audio saved to ${tempFilePathWebm} (Size: ${nodeBuffer.length} bytes)`);
 
         // 2. Convert .webm to .mp3 using ffmpeg
-        const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -acodec libmp3lame -ab 64k -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
-        console.log('Main: Executing ffmpeg command:', ffmpegCommand);
+        // Use reasonable defaults for Whisper (MP3, mono, 16kHz often good)
+        const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -acodec libmp3lame -ab 48k -ar 16000 -ac 1 -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
+        console.log('Main: Executing ffmpeg:', ffmpegCommand);
 
         try {
-            const { stdout, stderr } = await execPromise(ffmpegCommand);
-            if (stderr) { console.warn('Main: ffmpeg reported warnings/errors:', stderr); }
-            if (stdout) { console.log('Main: ffmpeg conversion stdout:', stdout); }
+            // Use exec directly for better error capture
+            await new Promise((resolve, reject) => {
+                exec(ffmpegCommand, (error, stdout, stderr) => {
+                    if (error) {
+                        console.error(`Main: ffmpeg exec error: ${error.message}`);
+                        console.error(`Main: ffmpeg stderr: ${stderr}`);
+                        reject(new Error(`ffmpeg failed: ${stderr || error.message}`));
+                        return;
+                    }
+                    if (stderr) {
+                         console.warn(`Main: ffmpeg stderr output: ${stderr}`);
+                    }
+                    console.log(`Main: ffmpeg stdout: ${stdout}`);
+                    resolve();
+                });
+            });
 
-            // Check if the output file was actually created and get its size
+             // Check if the output file was actually created and has size
             try {
                  await fs.promises.access(tempFilePathMp3, fs.constants.F_OK);
                  const mp3Stats = await fs.promises.stat(tempFilePathMp3);
-                 mp3FileSize = mp3Stats.size;
+                 if (mp3Stats.size === 0) { throw new Error("ffmpeg conversion resulted in an empty MP3 file."); }
                  mp3FileCreated = true;
-
-                 // --- Log MP3 file size and comparison ---
-                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (Size: ${mp3FileSize} bytes)`);
-                 if (webmFileSize > 0 && mp3FileSize > 0) {
-                    const reductionPercent = ((webmFileSize - mp3FileSize) / webmFileSize * 100).toFixed(1);
-                    console.log(`Main: File size reduced by ${reductionPercent}%`);
-                 }
-                 // --- End MP3 size logging ---
-
-                 if (mp3FileSize === 0) { throw new Error("ffmpeg conversion resulted in an empty MP3 file."); }
+                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (Size: ${mp3Stats.size} bytes)`);
             } catch (accessOrStatError) {
-                 throw new Error(`ffmpeg command ran but output file not found, inaccessible, or stats failed for: ${tempFilePathMp3}. stderr: ${stderr}. Error: ${accessOrStatError.message}`);
+                 // This error might follow a successful exec if ffmpeg failed silently but didn't return an error code
+                 throw new Error(`ffmpeg command may have run but output file not found or empty: ${tempFilePathMp3}. Error: ${accessOrStatError.message}`);
             }
-
         } catch (ffmpegError) {
-            console.error('Main: ffmpeg execution failed:', ffmpegError);
-            if (ffmpegError.message.includes('ENOENT') || (ffmpegError.stderr && ffmpegError.stderr.toLowerCase().includes('command not found'))) {
-                 throw new Error('ffmpeg command failed. Ensure ffmpeg is installed and in your system PATH.');
+            // Catch errors from exec or the file check
+            console.error('Main: ffmpeg processing failed:', ffmpegError);
+            const errorDetail = ffmpegError.message || 'Unknown ffmpeg error';
+            if (errorDetail.toLowerCase().includes('command not found') || errorDetail.includes('enoent')) {
+                 throw new Error('ffmpeg command not found. Ensure ffmpeg is installed and in your system PATH.');
             }
-            throw new Error(`ffmpeg conversion failed: ${ffmpegError.message || ffmpegError.stderr}`);
+            throw new Error(`ffmpeg conversion failed: ${errorDetail}`); // Re-throw the specific error
         }
 
         // 3. Send *converted* MP3 file to OpenAI Whisper API
-        console.log('Main: Sending converted MP3 audio to OpenAI Whisper API...');
+        console.log('Main: Sending converted MP3 to OpenAI...');
         const transcription = await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempFilePathMp3),
-            model: 'whisper-1',
+            model: 'whisper-1', // Use the base model for speed
+            // prompt: "User is dictating text." // Optional: Add prompt if needed
+            // language: "en" // Optional: Specify language if known
         });
 
-        console.log('Main: Transcription successful:', transcription.text);
+        const transcribedText = transcription.text?.trim();
+        console.log('Main: Transcription successful:', transcribedText || "[Empty result]");
 
-        // 4. Return the result
-        return { text: transcription.text };
+        // 4. Paste the text using robotjs
+        if (transcribedText && transcribedText.length > 0) {
+            try {
+                console.log("Main: Pasting text via robotjs...");
+                // Ensure the target application has focus. This might require platform-specific handling
+                // or user awareness. Pasting happens into the currently focused input field.
+                robot.typeString(transcribedText);
+                console.log("Main: Pasting finished.");
+                operationStatus.success = true; // Mark success *after* pasting
+            } catch (robotError) {
+                 console.error("Main: robotjs pasting failed:", robotError);
+                 // Don't throw here, report error via dialog and return status
+                 const pasteErrorMsg = `Transcription succeeded but pasting failed: ${robotError.message}. Please ensure the target window was active.`;
+                 dialog.showErrorBox("Pasting Error", pasteErrorMsg);
+                 operationStatus.error = pasteErrorMsg; // Set error, but don't overwrite success=false yet
+                 // We consider transcription a success, but pasting failed. Let renderer know.
+                 // Return success: false as the overall *paste* operation failed.
+                 operationStatus.success = false;
+            }
+        } else {
+            console.log("Main: Transcription result was empty or only whitespace, nothing to paste.");
+            // Consider this scenario a success (process finished), although nothing was pasted.
+            operationStatus.success = true;
+        }
+
+        // 5. Return the status
+        return operationStatus;
 
     } catch (error) {
-        console.error('Main: Error during transcription process:', error);
-        let errorMessage = 'Unknown transcription error occurred.';
+        console.error('Main: Error during transcription/pasting process:', error);
+        let errorMessage = 'An unexpected error occurred during processing.';
         if (error instanceof OpenAI.APIError) {
-            console.error(`OpenAI API Error Details: Status=${error.status}, Type=${error.type}, Code=${error.code}`);
-            errorMessage = `OpenAI Error (${error.status}): ${error.message}`;
+            console.error(`OpenAI API Error: Status=${error.status}, Type=${error.type}, Code=${error.code}, Message=${error.message}`);
+            errorMessage = `OpenAI Error (${error.status}): ${error.message || 'Failed to transcribe.'}`;
         } else if (error instanceof Error) {
+            // Use the specific error message (e.g., from ffmpeg, file system)
             errorMessage = error.message;
         }
-        return { error: errorMessage };
+        // --- NEW: Show error dialog ---
+        dialog.showErrorBox("Processing Failed", errorMessage);
+        // --- END NEW ---
+        operationStatus.error = errorMessage; // Set error status
+        operationStatus.success = false; // Ensure success is false on error
+        return operationStatus; // Return error status
 
     } finally {
-        // 5. Clean up BOTH temporary files
+        // 6. Clean up temporary files
         if (webmFileWritten) {
-            try {
-                await fs.promises.unlink(tempFilePathWebm);
-                console.log(`Main: Deleted temporary webm file ${tempFilePathWebm}`);
-            } catch (unlinkErr) {
-                console.error(`Main: Failed to delete temporary webm file ${tempFilePathWebm}:`, unlinkErr);
-            }
+            fs.promises.unlink(tempFilePathWebm)
+                .then(() => console.log(`Main: Deleted temp webm file ${tempFilePathWebm}`))
+                .catch(err => console.error(`Main: Failed to delete temp webm file ${tempFilePathWebm}:`, err));
         }
          if (mp3FileCreated) {
-            try {
-                await fs.promises.unlink(tempFilePathMp3);
-                console.log(`Main: Deleted temporary mp3 file ${tempFilePathMp3}`);
-            } catch (unlinkErr) {
-                console.error(`Main: Failed to delete temporary mp3 file ${tempFilePathMp3}:`, unlinkErr);
-            }
+            fs.promises.unlink(tempFilePathMp3)
+                .then(() => console.log(`Main: Deleted temp mp3 file ${tempFilePathMp3}`))
+                .catch(err => console.error(`Main: Failed to delete temp mp3 file ${tempFilePathMp3}:`, err));
         }
+        console.log("Main: Transcription IPC handler finished.");
     }
 });
 // --- END IPC Handler ---
