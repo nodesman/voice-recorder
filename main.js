@@ -5,6 +5,12 @@ const fs = require('fs');
 const os = require('os');
 require('dotenv').config(); // Load .env variables
 
+// --- NEW: Import child_process and promisify exec ---
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
+// --- END NEW ---
+
 // --- OpenAI Setup ---
 // ... (keep existing OpenAI setup code) ...
 const OpenAI = require('openai');
@@ -65,9 +71,7 @@ app.on('window-all-closed', function () {
 });
 
 // --- IPC Handler for Transcription ---
-// ... (keep existing IPC handler code) ...
 ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
-    // ... (no changes needed here) ...
     console.log('Main: Received audio data for transcription.');
 
     if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
@@ -75,32 +79,81 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         return { error: 'No audio data received by main process.' };
     }
 
-    // 1. Save buffer to a temporary file (OpenAI SDK prefers files)
-    const tempFileName = `openai-audio-${Date.now()}.webm`; // Assume webm
-    const tempFilePath = path.join(os.tmpdir(), tempFileName);
-    let fileWritten = false;
+    // --- File Paths ---
+    const timestamp = Date.now();
+    const tempFileNameWebm = `openai-audio-input-${timestamp}.webm`; // Original input
+    const tempFileNameMp3 = `openai-audio-output-${timestamp}.mp3`;   // Converted output
+    const tempFilePathWebm = path.join(os.tmpdir(), tempFileNameWebm);
+    const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3);
+    // --- End File Paths ---
+
+    let webmFileWritten = false;
+    let mp3FileCreated = false;
 
     try {
+        // 1. Save original buffer to a temporary .webm file
         const nodeBuffer = Buffer.from(audioDataUint8Array);
-
         if (nodeBuffer.length === 0) {
             throw new Error("Received audio data resulted in an empty Buffer.");
         }
+        await fs.promises.writeFile(tempFilePathWebm, nodeBuffer);
+        webmFileWritten = true;
+        console.log(`Main: Original audio saved temporarily to ${tempFilePathWebm} (${nodeBuffer.length} bytes)`);
 
-        await fs.promises.writeFile(tempFilePath, nodeBuffer);
-        fileWritten = true;
-        console.log(`Main: Audio saved temporarily to ${tempFilePath} (${nodeBuffer.length} bytes)`);
+        // 2. Convert .webm to .mp3 using ffmpeg
+        //    -i: input file
+        //    -vn: disable video recording
+        //    -acodec libmp3lame: specify mp3 codec
+        //    -ab 64k: set audio bitrate to 64kbps (good balance for voice)
+        //    -y: overwrite output file if it exists
+        //    -hide_banner -loglevel error: suppress verbose output, show only errors
+        //    Quoting paths ("${...}") handles spaces in file paths/names.
+        const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -acodec libmp3lame -ab 64k -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
+        console.log('Main: Executing ffmpeg command:', ffmpegCommand);
 
-        // 2. Send file to OpenAI Whisper API
-        console.log('Main: Sending audio to OpenAI Whisper API...');
+        try {
+            const { stdout, stderr } = await execPromise(ffmpegCommand);
+            if (stderr) {
+                console.warn('Main: ffmpeg reported warnings/errors:', stderr);
+                // Depending on the error, you might want to throw or continue
+                // For now, we'll try to proceed if the output file exists.
+            }
+            console.log('Main: ffmpeg conversion stdout:', stdout);
+
+            // Check if the output file was actually created
+            try {
+                 await fs.promises.access(tempFilePathMp3, fs.constants.F_OK);
+                 mp3FileCreated = true;
+                 const stats = await fs.promises.stat(tempFilePathMp3);
+                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (${stats.size} bytes)`);
+                 if (stats.size === 0) {
+                    throw new Error("ffmpeg conversion resulted in an empty MP3 file.");
+                 }
+            } catch (accessError) {
+                 throw new Error(`ffmpeg command ran but output file not found or inaccessible: ${tempFilePathMp3}. stderr: ${stderr}`);
+            }
+
+        } catch (ffmpegError) {
+            console.error('Main: ffmpeg execution failed:', ffmpegError);
+            // Provide a more helpful error if ffmpeg is likely not installed
+            if (ffmpegError.message.includes('ENOENT') || (ffmpegError.stderr && ffmpegError.stderr.toLowerCase().includes('command not found'))) {
+                 throw new Error('ffmpeg command failed. Ensure ffmpeg is installed and in your system PATH.');
+            }
+            throw new Error(`ffmpeg conversion failed: ${ffmpegError.message || ffmpegError.stderr}`);
+        }
+
+        // 3. Send *converted* MP3 file to OpenAI Whisper API
+        console.log('Main: Sending converted MP3 audio to OpenAI Whisper API...');
         const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
+            file: fs.createReadStream(tempFilePathMp3), // Use the MP3 file
             model: 'whisper-1',
+            // Optionally specify response format if needed, though text is default
+            // response_format: "json" // or "text", "srt", "verbose_json", "vtt"
         });
 
         console.log('Main: Transcription successful:', transcription.text);
 
-        // 3. Return the result
+        // 4. Return the result
         return { text: transcription.text };
 
     } catch (error) {
@@ -115,13 +168,21 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         return { error: errorMessage };
 
     } finally {
-        // 4. Clean up the temporary file
-        if (fileWritten) {
+        // 5. Clean up BOTH temporary files
+        if (webmFileWritten) {
             try {
-                await fs.promises.unlink(tempFilePath);
-                console.log(`Main: Deleted temporary file ${tempFilePath}`);
+                await fs.promises.unlink(tempFilePathWebm);
+                console.log(`Main: Deleted temporary webm file ${tempFilePathWebm}`);
             } catch (unlinkErr) {
-                console.error(`Main: Failed to delete temporary file ${tempFilePath}:`, unlinkErr);
+                console.error(`Main: Failed to delete temporary webm file ${tempFilePathWebm}:`, unlinkErr);
+            }
+        }
+         if (mp3FileCreated) {
+            try {
+                await fs.promises.unlink(tempFilePathMp3);
+                console.log(`Main: Deleted temporary mp3 file ${tempFilePathMp3}`);
+            } catch (unlinkErr) {
+                console.error(`Main: Failed to delete temporary mp3 file ${tempFilePathMp3}:`, unlinkErr);
             }
         }
     }
