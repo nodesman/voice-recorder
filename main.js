@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard } = require('electron'); // <-- Import clipboard, remove robotjs reference
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard, screen } = require('electron'); // <-- ADD screen module
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -25,9 +25,24 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
 let mainWindow = null;
 
 function createWindow() {
+    // Get primary display work area dimensions (excludes taskbars/docks)
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    // Calculate the desired position based on the nested quadrants
+    // Target is the top-left corner of the "bottom-left of the top-right of the top-right" quadrant
+    const targetX = Math.round(width * 3 / 4); // 75% of width
+    const targetY = Math.round(height * 1 / 8); // 12.5% of height
+
+    // Define window dimensions (ensure these match your intended size)
+    const windowWidth = 380;
+    const windowHeight = 65;
+
     mainWindow = new BrowserWindow({
-        width: 380,
-        height: 65, // Keep original height for consistency across states
+        width: windowWidth,
+        height: windowHeight,
+        x: targetX, // <-- Set the calculated X position
+        y: targetY, // <-- Set the calculated Y position
         frame: false,
         resizable: false,
         alwaysOnTop: true,
