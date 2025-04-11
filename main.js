@@ -12,7 +12,6 @@ const execPromise = util.promisify(exec);
 // --- END NEW ---
 
 // --- OpenAI Setup ---
-// ... (keep existing OpenAI setup code) ...
 const OpenAI = require('openai');
 
 if (!process.env.OPENAI_API_KEY) {
@@ -25,42 +24,30 @@ const openai = new OpenAI({
 });
 // --- END OpenAI Setup ---
 
-
 function createWindow() {
     const mainWindow = new BrowserWindow({
-        // --- Dictation Mode Window Settings ---
-        width: 380,              // Reduced width
-        height: 75,              // Reduced height (enough for bar + transcription text above)
-        frame: false,            // Remove window frame (title bar, etc.)
-        resizable: false,        // Prevent resizing
-        alwaysOnTop: true,       // Keep it above other windows (optional, but common for widgets)
-        // --- End Dictation Mode Settings ---
+        width: 380,
+        height: 75,
+        frame: false,
+        resizable: false,
+        alwaysOnTop: true,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            devTools: !app.isPackaged, // Keep this for development debugging
+            devTools: !app.isPackaged,
         }
     });
 
     mainWindow.loadFile('index.html');
 
-    // Open DevTools automatically if not packaged (Keep this for development!)
     if (!app.isPackaged) {
         mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
-
-    // Optional: If you want the window to be draggable even without a frame
-    // You'd need to add a CSS class like 'draggable-area' to an element in index.html (e.g., the main bar)
-    // and uncomment the line below in style.css
-    // mainWindow.webContents.on('dom-ready', () => {
-    //     mainWindow.webContents.insertCSS('-webkit-app-region: drag; -webkit-user-select: none;');
-    // });
 }
 
 app.whenReady().then(() => {
     createWindow();
-
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -81,14 +68,16 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
 
     // --- File Paths ---
     const timestamp = Date.now();
-    const tempFileNameWebm = `openai-audio-input-${timestamp}.webm`; // Original input
-    const tempFileNameMp3 = `openai-audio-output-${timestamp}.mp3`;   // Converted output
+    const tempFileNameWebm = `openai-audio-input-${timestamp}.webm`;
+    const tempFileNameMp3 = `openai-audio-output-${timestamp}.mp3`;
     const tempFilePathWebm = path.join(os.tmpdir(), tempFileNameWebm);
     const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3);
     // --- End File Paths ---
 
     let webmFileWritten = false;
     let mp3FileCreated = false;
+    let webmFileSize = 0; // Variable to store webm size
+    let mp3FileSize = 0;  // Variable to store mp3 size
 
     try {
         // 1. Save original buffer to a temporary .webm file
@@ -98,16 +87,19 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         }
         await fs.promises.writeFile(tempFilePathWebm, nodeBuffer);
         webmFileWritten = true;
-        console.log(`Main: Original audio saved temporarily to ${tempFilePathWebm} (${nodeBuffer.length} bytes)`);
+
+        // --- Get and log original WebM file size ---
+        try {
+            const webmStats = await fs.promises.stat(tempFilePathWebm);
+            webmFileSize = webmStats.size;
+            console.log(`Main: Original audio saved to ${tempFilePathWebm} (Size: ${webmFileSize} bytes)`);
+        } catch (statError) {
+             console.warn(`Main: Could not get stats for temporary webm file ${tempFilePathWebm}: ${statError.message}`);
+             // Don't stop the process, but log the warning
+        }
+        // --- End WebM size logging ---
 
         // 2. Convert .webm to .mp3 using ffmpeg
-        //    -i: input file
-        //    -vn: disable video recording
-        //    -acodec libmp3lame: specify mp3 codec
-        //    -ab 64k: set audio bitrate to 64kbps (good balance for voice)
-        //    -y: overwrite output file if it exists
-        //    -hide_banner -loglevel error: suppress verbose output, show only errors
-        //    Quoting paths ("${...}") handles spaces in file paths/names.
         const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -acodec libmp3lame -ab 64k -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
         console.log('Main: Executing ffmpeg command:', ffmpegCommand);
 
@@ -115,27 +107,34 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
             const { stdout, stderr } = await execPromise(ffmpegCommand);
             if (stderr) {
                 console.warn('Main: ffmpeg reported warnings/errors:', stderr);
-                // Depending on the error, you might want to throw or continue
-                // For now, we'll try to proceed if the output file exists.
             }
-            console.log('Main: ffmpeg conversion stdout:', stdout);
+            // ffmpeg stdout is usually empty with -hide_banner -loglevel error, but log if present
+            if (stdout) console.log('Main: ffmpeg conversion stdout:', stdout);
 
-            // Check if the output file was actually created
+            // Check if the output file was actually created and get its size
             try {
                  await fs.promises.access(tempFilePathMp3, fs.constants.F_OK);
+                 const mp3Stats = await fs.promises.stat(tempFilePathMp3); // Get stats
+                 mp3FileSize = mp3Stats.size; // Store size
                  mp3FileCreated = true;
-                 const stats = await fs.promises.stat(tempFilePathMp3);
-                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (${stats.size} bytes)`);
-                 if (stats.size === 0) {
+
+                 // --- Log MP3 file size and comparison ---
+                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (Size: ${mp3FileSize} bytes)`);
+                 if (webmFileSize > 0 && mp3FileSize > 0) {
+                    const reductionPercent = ((webmFileSize - mp3FileSize) / webmFileSize * 100).toFixed(1);
+                    console.log(`Main: File size reduced by ${reductionPercent}%`);
+                 }
+                 // --- End MP3 size logging ---
+
+                 if (mp3FileSize === 0) {
                     throw new Error("ffmpeg conversion resulted in an empty MP3 file.");
                  }
-            } catch (accessError) {
-                 throw new Error(`ffmpeg command ran but output file not found or inaccessible: ${tempFilePathMp3}. stderr: ${stderr}`);
+            } catch (accessOrStatError) {
+                 throw new Error(`ffmpeg command ran but output file not found, inaccessible, or stats failed for: ${tempFilePathMp3}. stderr: ${stderr}. Error: ${accessOrStatError.message}`);
             }
 
         } catch (ffmpegError) {
             console.error('Main: ffmpeg execution failed:', ffmpegError);
-            // Provide a more helpful error if ffmpeg is likely not installed
             if (ffmpegError.message.includes('ENOENT') || (ffmpegError.stderr && ffmpegError.stderr.toLowerCase().includes('command not found'))) {
                  throw new Error('ffmpeg command failed. Ensure ffmpeg is installed and in your system PATH.');
             }
@@ -145,10 +144,8 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         // 3. Send *converted* MP3 file to OpenAI Whisper API
         console.log('Main: Sending converted MP3 audio to OpenAI Whisper API...');
         const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePathMp3), // Use the MP3 file
+            file: fs.createReadStream(tempFilePathMp3),
             model: 'whisper-1',
-            // Optionally specify response format if needed, though text is default
-            // response_format: "json" // or "text", "srt", "verbose_json", "vtt"
         });
 
         console.log('Main: Transcription successful:', transcription.text);
