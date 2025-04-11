@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Security Policy: Allow self, inline styles/scripts -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
-    <title>Audio Recorder</title> <!-- Simplified Title -->
+    <title>Audio Recorder</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -33,11 +32,16 @@
               <circle cx="50" cy="50" r="48" fill="white"/>
               <polyline points="30,50 45,65 70,35" fill="none" stroke="#333333" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <!-- Spinner can be added here and shown/hidden via JS/CSS if needed -->
-            <!-- <svg class="spinner-svg recording-spinner" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"> ... </svg> -->
         </div>
 
-        <!-- Processing View and Transcription Display Removed -->
+        <!-- NEW: Processing State: Spinner -->
+        <div class="recorder-state processing-state">
+             <svg class="spinner-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                 <circle class="spinner-circle" cx="50" cy="50" r="45"/>
+             </svg>
+             <!-- Optional Label -->
+             <!-- <span class="processing-label">Processing...</span> -->
+        </div>
 
     </div>
 

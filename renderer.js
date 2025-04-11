@@ -2,18 +2,17 @@
 "use strict";
 
 // Check essential APIs
-if (typeof window.electronAPI?.transcribeAndPaste !== 'function' ||
+if (typeof window.electronAPI?.transcribeAndCopy !== 'function' || // <-- Check for renamed function
     typeof window.electronAPI?.hideWindow !== 'function' ||
     typeof window.electronAPI?.onTriggerStartRecording !== 'function' ||
     typeof window.electronAPI?.onTriggerStopRecording !== 'function') {
     console.error("Electron API functions missing! Check preload script, contextIsolation, and main process IPC handlers.");
     alert("Critical Error: Cannot communicate with the main process correctly. Functionality may be broken. Please check logs or restart.");
-    // Optionally disable UI elements
     const micButton = document.getElementById('micButton');
     if (micButton) {
         micButton.disabled = true;
         micButton.style.cursor = 'not-allowed';
-        micButton.style.fill = '#666'; // Dim the icon
+        micButton.style.fill = '#666';
     }
 }
 
@@ -24,11 +23,12 @@ const AudioRecorder = (() => {
     let cancelButton;
     let confirmButton;
     let recordingCanvas;
-    // Remove: processingCanvas, totalDurationDisplay, transcriptionDisplay
     let timerDisplay;
+    // No need for processingCanvas, spinner is in its own div
 
     // --- Audio & State Variables ---
-    let isRecording = false;
+    let isRecording = false; // Reflects if mediaRecorder is active
+    let currentState = 'idle'; // Track current UI state explicitly
     let mediaStream = null;
     let mediaRecorder = null;
     let audioContext = null;
@@ -38,7 +38,6 @@ const AudioRecorder = (() => {
     let recordingStartTime;
     let timerIntervalId = null;
     let animationFrameId = null;
-    // Remove: transcriptionTimeoutId
 
     const WAVEFORM_BAR_COUNT = 60;
     let waveformHistory = new Array(WAVEFORM_BAR_COUNT).fill(0);
@@ -52,20 +51,19 @@ const AudioRecorder = (() => {
         confirmButton = document.getElementById('confirmButton');
         recordingCanvas = document.getElementById('recordingWaveformCanvas');
         timerDisplay = document.getElementById('timerDisplay');
-        // Remove assignments for removed elements
 
         if (!recorderContainer || !micButton || !cancelButton || !confirmButton || !recordingCanvas || !timerDisplay) {
             console.error("Recorder UI elements not found! Check IDs in index.html.");
-            return; // Stop initialization
+            return;
         }
 
         // Check again if API is available before adding listeners
-        if (typeof window.electronAPI?.transcribeAndPaste === 'function' &&
+        if (typeof window.electronAPI?.transcribeAndCopy === 'function' && // <-- Check renamed
             typeof window.electronAPI?.hideWindow === 'function' &&
             typeof window.electronAPI?.onTriggerStartRecording === 'function' &&
             typeof window.electronAPI?.onTriggerStopRecording === 'function') {
 
-            micButton.addEventListener('click', startRecording); // Still allow manual click to start
+            micButton.addEventListener('click', startRecording);
             cancelButton.addEventListener('click', () => stopRecording(false)); // Save=false
             confirmButton.addEventListener('click', () => stopRecording(true)); // Save=true
 
@@ -86,37 +84,31 @@ const AudioRecorder = (() => {
 
     // --- State Management ---
     function setState(newState) {
-        if (!recorderContainer) return; // Guard against missing container
-
-        // Remove processing state logic
+        if (!recorderContainer) return;
+        console.log(`State changing from ${currentState} to ${newState}`);
+        currentState = newState;
         recorderContainer.dataset.state = newState;
-        isRecording = (newState === 'recording');
-
-        console.log("State changed to:", newState);
+        isRecording = (newState === 'recording'); // Keep isRecording flag sync'd
     }
 
     // --- Recording Logic ---
     async function startRecording() {
-        // Use API check relevant to this function
-        if (isRecording || typeof window.electronAPI?.transcribeAndPaste !== 'function') {
-            console.warn("Cannot start recording. Already recording or core API unavailable.");
+        if (currentState !== 'idle' || typeof window.electronAPI?.transcribeAndCopy !== 'function') { // <-- Check renamed
+            console.warn(`Cannot start recording. Current state: ${currentState} or core API unavailable.`);
             return;
         }
         console.log("Attempting to start recording...");
-
-        // Remove UI reset related to transcriptionDisplay
+        setState('starting'); // Intermediate state (optional)
 
         try {
             mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             console.log("Microphone access granted.");
 
-            // Reset state
             waveformHistory.fill(0);
             recordedChunks = [];
             if (timerIntervalId) clearInterval(timerIntervalId);
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
-            // Setup Web Audio API
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             sourceNode = audioContext.createMediaStreamSource(mediaStream);
             analyserNode = audioContext.createAnalyser();
@@ -124,12 +116,8 @@ const AudioRecorder = (() => {
             analyserNode.smoothingTimeConstant = 0.6;
             sourceNode.connect(analyserNode);
 
-            // Setup MediaRecorder
             const mimeTypes = [
-                'audio/webm;codecs=opus',
-                'audio/ogg;codecs=opus',
-                'audio/webm',
-                'audio/mp4',
+                'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4',
             ];
             currentMimeType = '';
             for (const type of mimeTypes) {
@@ -142,14 +130,17 @@ const AudioRecorder = (() => {
             const options = currentMimeType ? { mimeType: currentMimeType } : {};
             mediaRecorder = new MediaRecorder(mediaStream, options);
 
-            // Assign event handlers
             mediaRecorder.ondataavailable = handleDataAvailable;
-            mediaRecorder.onstop = handleStop;
+            mediaRecorder.onstop = handleStop; // handleStop now manages processing state and hiding
+            mediaRecorder.onerror = (event) => { // Add basic error handling
+                console.error("MediaRecorder error:", event.error);
+                alert(`Recording error: ${event.error.name} - ${event.error.message}`);
+                stopRecording(false); // Cancel on error
+            };
 
-            // Start
-            mediaRecorder.start(100);
+            mediaRecorder.start(100); // Start collecting data
             recordingStartTime = Date.now();
-            setState('recording');
+            setState('recording'); // Transition to recording state visually
             startTimer();
             visualize();
 
@@ -165,40 +156,57 @@ const AudioRecorder = (() => {
                  alert(`Could not start recording: ${err.message}`);
             }
             cleanUpAudio();
-            setState('idle');
+            setState('idle'); // Revert to idle on failure
         }
     }
 
     function stopRecording(shouldSaveAndProcess) {
-        console.log(`Stopping recording. Save intent: ${shouldSaveAndProcess}`);
-        if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+        console.log(`Stopping recording. Save intent: ${shouldSaveAndProcess}. Current state: ${currentState}`);
+        if (!isRecording || !mediaRecorder || mediaRecorder.state === 'inactive') {
             console.log("Recorder not active or already stopped.");
-            if (recorderContainer?.dataset.state !== 'idle') {
-                // Ensure cleanup if stop is called while not idle but recorder is inactive
-                cleanUpAudio();
-                stopTimer();
-                stopVisualization();
-                setState('idle');
+            // If somehow in a non-idle state but recorder inactive, force cleanup and idle
+            if (currentState !== 'idle') {
+                 console.warn("Stop requested while recorder inactive but UI state not idle. Resetting.");
+                 cleanUpAudio();
+                 setState('idle');
+                 // If cancelled, ensure window hides
+                 if (!shouldSaveAndProcess && typeof window.electronAPI?.hideWindow === 'function') {
+                     window.electronAPI.hideWindow();
+                 }
             }
             return;
-        }
-
-        // Attach the save flag
-        mediaRecorder.shouldSaveAndProcess = shouldSaveAndProcess;
-
-        // Request stop
-        try {
-            mediaRecorder.stop(); // handleStop will execute on completion
-        } catch (error) {
-            console.error("Error calling mediaRecorder.stop():", error);
-            // Force cleanup and idle state if stopping fails
-            cleanUpAudio();
-            setState('idle');
         }
 
         // Stop visual feedback immediately
         stopVisualization();
         stopTimer();
+
+        // Attach the save flag to the recorder instance for handleStop to access
+        mediaRecorder.shouldSaveAndProcess = shouldSaveAndProcess;
+
+        // If we intend to process, transition to processing state NOW
+        if (shouldSaveAndProcess) {
+            setState('processing');
+        } else {
+             // If cancelling, we'll go directly to idle in handleStop/cleanup
+             // But setting it here might prevent race conditions? Let handleStop manage final state.
+             // setState('idle'); // Maybe defer this
+        }
+
+        // Request stop. handleStop will execute asynchronously.
+        try {
+            mediaRecorder.stop();
+            console.log("MediaRecorder stop requested.");
+        } catch (error) {
+            console.error("Error calling mediaRecorder.stop():", error);
+            // Force cleanup and idle state if stopping fails catastrophically
+            cleanUpAudio();
+            setState('idle');
+            // Hide window if the stop attempt failed
+            if (typeof window.electronAPI?.hideWindow === 'function') {
+                window.electronAPI.hideWindow();
+            }
+        }
     }
 
     function handleDataAvailable(event) {
@@ -207,17 +215,20 @@ const AudioRecorder = (() => {
         }
     }
 
-    // handleStop: Triggered automatically when mediaRecorder.stop() finishes
+    // handleStop: Triggered *after* mediaRecorder.stop() finishes flushing data.
     async function handleStop() {
-        console.log("MediaRecorder 'stop' event triggered.");
+        console.log("MediaRecorder 'stop' event triggered. Current state:", currentState);
+        // Retrieve the flag set in stopRecording
         const shouldSaveAndProcess = !!mediaRecorder?.shouldSaveAndProcess;
-        // Remove reference to finalDuration as it's not displayed
 
-        if (mediaRecorder) delete mediaRecorder.shouldSaveAndProcess; // Clean up flag
+        // Clear the flag now we've read it
+        if (mediaRecorder) delete mediaRecorder.shouldSaveAndProcess;
+
+        let processingSuccess = false; // Track if processing was initiated and succeeded
 
         if (shouldSaveAndProcess && recordedChunks.length > 0) {
-            // No 'processing' state change
-            // Remove UI updates for processing state
+             // State should already be 'processing' here
+             console.log("Processing recorded data...");
 
             const finalBlob = new Blob(recordedChunks, { type: currentMimeType || 'audio/webm' });
             console.log(`Final Blob created: Size=${finalBlob.size}, Type=${finalBlob.type}`);
@@ -227,153 +238,163 @@ const AudioRecorder = (() => {
                 const audioDataUint8Array = new Uint8Array(arrayBuffer);
 
                 if (audioDataUint8Array.length === 0) {
-                     throw new Error("Converted audio data is empty.");
+                     throw new Error("Recorded audio data is empty.");
                 }
 
-                console.log(`Renderer: Sending ${audioDataUint8Array.length} bytes to main for transcription/pasting.`);
-                // Remove setting transcriptionDisplay text
+                console.log(`Renderer: Sending ${audioDataUint8Array.length} bytes to main for transcription/copying.`);
 
-                // --- Send to Main Process via Preload ---
-                if (typeof window.electronAPI?.transcribeAndPaste === 'function' &&
-                    typeof window.electronAPI?.hideWindow === 'function') {
-
-                    // Initiate transcription/pasting (async, don't await the full process here)
-                    window.electronAPI.transcribeAndPaste(audioDataUint8Array)
-                        .then(result => {
-                            if (result?.success) {
-                                console.log("Renderer: Main process reported successful transcription/paste operation.");
-                            } else {
-                                // Error is now handled by main process dialog
-                                console.error("Renderer: Main process reported error:", result?.error || "Unknown error");
-                                // No UI element to display the error here
-                            }
-                        })
-                        .catch(ipcError => {
-                            console.error("Renderer: Error invoking transcribeAndPaste IPC:", ipcError);
-                             // No UI element to display the error here
-                             // A main process dialog might be appropriate here too, or rely on console logs
-                        });
-
-                    // --- Hide the window immediately after sending ---
-                    console.log("Renderer: Requesting window hide.");
-                    window.electronAPI.hideWindow();
-
+                // --- Send to Main Process via Preload & AWAIT result ---
+                if (typeof window.electronAPI?.transcribeAndCopy === 'function') {
+                    try {
+                        // Await the actual transcription/copy result from main
+                        const result = await window.electronAPI.transcribeAndCopy(audioDataUint8Array);
+                        if (result?.success) {
+                            console.log("Renderer: Main process reported successful transcription/copy operation.");
+                            processingSuccess = true; // Mark as successful
+                        } else {
+                            console.error("Renderer: Main process reported error during transcription/copy:", result?.error || "Unknown error");
+                            // Error already shown via dialog in main process
+                            processingSuccess = false; // Mark as failed
+                        }
+                    } catch (ipcError) {
+                        console.error("Renderer: Error invoking transcribeAndCopy IPC:", ipcError);
+                        alert("Error communicating with the main process for transcription.");
+                        processingSuccess = false; // Mark as failed
+                    }
                 } else {
-                    console.error("Renderer: Essential API functions (transcribeAndPaste/hideWindow) unavailable!");
-                    alert("Error: Cannot send audio or hide window. Communication failed.");
+                    console.error("Renderer: Essential API function (transcribeAndCopy) unavailable!");
+                    alert("Error: Cannot send audio for processing. Communication failed.");
+                    processingSuccess = false; // Mark as failed
                 }
 
             } catch (error) {
                 console.error("Renderer: Error processing Blob or preparing audio data:", error);
-                 alert(`Error preparing audio: ${error.message}`); // Show error to user
-                 // No UI element to display the error persistently
+                alert(`Error preparing audio: ${error.message}`);
+                processingSuccess = false; // Mark as failed
             } finally {
-                // Always go back to idle and clean up after attempting to save/process
-                console.log("Renderer: Finalizing stop (save path), setting state to idle.");
-                setState('idle'); // Go back to idle state *after* initiating hide/process
-                cleanUpAudio(); // Clean up resources like mic stream
-                recordedChunks = []; // Clear chunks for next recording
+                 // This block runs regardless of success/failure within the processing block
+                 console.log("Renderer: Processing finished (or failed). Cleaning up audio resources.");
+                 cleanUpAudio(); // Clean up mic/context
+                 recordedChunks = []; // Clear chunks
+
+                 // HIDE WINDOW AFTER PROCESSING COMPLETES (success or failure)
+                 if (typeof window.electronAPI?.hideWindow === 'function') {
+                     console.log("Renderer: Requesting window hide after processing attempt.");
+                     window.electronAPI.hideWindow();
+                 } else {
+                     console.error("Renderer: Cannot hide window, API unavailable.");
+                 }
+
+                 // Set final state to IDLE *after* processing and hide request
+                 setState('idle');
             }
 
         } else {
             // If recording was cancelled or empty
             console.log("Recording cancelled or no data recorded.");
-            setState('idle'); // Go back to idle
             cleanUpAudio(); // Clean up resources immediately
             recordedChunks = []; // Clear chunks
-            // If the window is still visible (e.g., manual cancel click), hide it
-            if (typeof window.electronAPI?.hideWindow === 'function') {
-                 // Check if window is actually visible? Maybe not necessary, main checks.
-                 console.log("Renderer: Requesting window hide after cancel.");
-                 window.electronAPI.hideWindow();
-            }
-        }
 
-        // Redundant cleanup check, handled within the if/else branches now
-        // if (recorderContainer.dataset.state !== 'processing') { ... } removed
+            // HIDE WINDOW ON CANCEL
+            if (typeof window.electronAPI?.hideWindow === 'function') {
+                 console.log("Renderer: Requesting window hide after cancel/no data.");
+                 window.electronAPI.hideWindow();
+            } else {
+                 console.error("Renderer: Cannot hide window, API unavailable.");
+            }
+            // Set final state to IDLE
+            setState('idle');
+        }
     }
 
-    // --- NEW: Shortcut/Blur Event Handlers ---
+    // --- Shortcut/Blur Event Handlers ---
     function handleTriggerStart() {
         console.log("Renderer: Received trigger-start-recording.");
-        // Ensure we are in idle state before starting
-        if (recorderContainer.dataset.state === 'idle') {
+        if (currentState === 'idle') {
             startRecording();
         } else {
-            console.warn("Renderer: Ignoring trigger-start as state is not idle:", recorderContainer.dataset.state);
+            console.warn("Renderer: Ignoring trigger-start as state is not idle:", currentState);
         }
     }
 
     function handleTriggerStop(shouldSave) {
-        console.log(`Renderer: Received trigger-stop-recording (save: ${shouldSave}).`);
-        // Ensure we are actually recording before stopping
-        if (recorderContainer.dataset.state === 'recording') {
+        console.log(`Renderer: Received trigger-stop-recording (save: ${shouldSave}). Current state: ${currentState}`);
+        if (currentState === 'recording') {
             stopRecording(shouldSave);
         } else {
-            console.warn("Renderer: Ignoring trigger-stop as state is not recording:", recorderContainer.dataset.state);
-             // If triggered while not recording (e.g. blur on idle), ensure window hides
-            if (typeof window.electronAPI?.hideWindow === 'function') {
-                 console.log("Renderer: Requesting window hide because stop triggered while not recording.");
-                 window.electronAPI.hideWindow();
-            }
-             // Ensure cleanup if somehow resources are active but state is wrong
-             if (mediaStream || mediaRecorder) {
+            console.warn("Renderer: Ignoring trigger-stop as state is not recording:", currentState);
+             // If triggered while not recording (e.g., blur on idle/processing), ensure window hides eventually
+             // The stopRecording(false) call in main.js on blur handles this path now.
+             // We might still want to ensure cleanup if resources are somehow stuck.
+            if (mediaStream || mediaRecorder || audioContext) {
                  console.warn("Renderer: Found active media resources despite non-recording state during stop trigger. Forcing cleanup.");
                  cleanUpAudio();
-                 setState('idle'); // Correct state
+            }
+            // Ensure we are in idle state if not recording
+            if (currentState !== 'idle') {
+                setState('idle');
+            }
+            // If window is still visible, hide it (e.g., blur on idle)
+             if (typeof window.electronAPI?.hideWindow === 'function') {
+                 console.log("Renderer: Requesting window hide because stop triggered while not recording.");
+                 window.electronAPI.hideWindow();
              }
         }
     }
-
 
     // --- Cleanup ---
     function cleanUpAudio() {
         console.log("Cleaning up audio resources...");
         if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
-             console.warn("Cleanup called while recorder state indicates recording. This shouldn't normally happen.");
-             // If stopRecording failed or wasn't called, try stopping tracks directly
+             console.warn("Cleanup called while recorder state is active. Attempting track stop.");
              if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log("Track stopped during cleanup:", track.kind);
+                });
+             } else {
+                 console.warn("MediaStream missing during active recorder cleanup.");
              }
+        } else if (mediaStream) {
+             mediaStream.getTracks().forEach(track => {
+                 track.stop();
+                 // console.log("Track stopped during normal cleanup:", track.kind);
+             });
+             mediaStream = null;
+             // console.log("MediaStream tracks stopped.");
         }
 
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop()); // Ensure tracks are stopped
-            mediaStream = null;
-            console.log("MediaStream tracks stopped.");
-        }
+
         if (sourceNode) {
-            sourceNode.disconnect();
+            try { sourceNode.disconnect(); } catch(e) {}
             sourceNode = null;
         }
         if (analyserNode) {
-            analyserNode.disconnect();
+            try { analyserNode.disconnect(); } catch(e) {}
             analyserNode = null;
         }
         if (audioContext && audioContext.state !== 'closed') {
             audioContext.close().then(() => {
-                console.log("AudioContext closed.");
+                // console.log("AudioContext closed.");
             }).catch(e => console.warn("Error closing AudioContext:", e));
             audioContext = null;
         }
         if (mediaRecorder) {
-            // Prevent further events if recorder is mid-stop
             mediaRecorder.ondataavailable = null;
             mediaRecorder.onstop = null;
-            mediaRecorder.onerror = null; // Add onerror just in case
+            mediaRecorder.onerror = null;
             mediaRecorder = null;
-            console.log("MediaRecorder instance released.");
+            // console.log("MediaRecorder instance released.");
         }
 
-        // Reset chunks explicitly
-        recordedChunks = [];
+        recordedChunks = []; // Ensure chunks are always cleared
+        isRecording = false; // Ensure internal flag is reset
         console.log("Audio cleanup complete.");
     }
 
     // --- Visualization ---
     function visualize() {
-        // Check against actual recording state derived from dataset.state
-        if (!analyserNode || recorderContainer?.dataset.state !== 'recording') {
+        if (!analyserNode || currentState !== 'recording') { // Check explicit state
             stopVisualization();
             return;
         }
@@ -394,7 +415,6 @@ const AudioRecorder = (() => {
             waveformHistory.shift();
         }
 
-        // Only draw on recording canvas
         drawWaveform(recordingCanvas, waveformHistory);
 
         animationFrameId = requestAnimationFrame(visualize);
@@ -405,6 +425,7 @@ const AudioRecorder = (() => {
             cancelAnimationFrame(animationFrameId);
             animationFrameId = null;
         }
+        // Clear the canvas when visualization stops
         if (recordingCanvas) {
             const ctx = recordingCanvas.getContext('2d');
              if (ctx) {
@@ -413,7 +434,7 @@ const AudioRecorder = (() => {
         }
     }
 
-    // Generic draw function - Only used for recording canvas now
+    // --- Generic draw function - Only used for recording canvas ---
     function drawWaveform(canvas, historyData) {
         if (!canvas || typeof canvas.getContext !== 'function') return;
         const ctx = canvas.getContext('2d');
@@ -432,8 +453,8 @@ const AudioRecorder = (() => {
 
         ctx.beginPath();
         for (let i = 0; i < numBars; i++) {
-            const amplitude = Math.max(historyData[i] || 0, 0.01);
-            const barHeight = Math.min(height, Math.max(1, amplitude * height * 0.9));
+            const amplitude = Math.max(historyData[i] || 0, 0.01); // Ensure min amplitude > 0
+            const barHeight = Math.min(height, Math.max(1, amplitude * height * 0.9)); // Min height 1px
             const x = i * barWidth + barWidth / 2;
             const y1 = centerY - barHeight / 2;
             const y2 = centerY + barHeight / 2;
@@ -451,8 +472,7 @@ const AudioRecorder = (() => {
         if (!recordingStartTime) recordingStartTime = Date.now();
 
         timerIntervalId = setInterval(() => {
-            // Check against actual recording state
-            if (recorderContainer?.dataset.state !== 'recording' || !recordingStartTime) {
+            if (currentState !== 'recording' || !recordingStartTime) { // Check explicit state
                 stopTimer();
                 return;
             }
@@ -466,7 +486,9 @@ const AudioRecorder = (() => {
             clearInterval(timerIntervalId);
             timerIntervalId = null;
         }
-        recordingStartTime = null;
+        recordingStartTime = null; // Reset start time
+        // Reset timer display? Optional, might want to keep last value visible briefly.
+        // timerDisplay.textContent = "0:00";
     }
 
     // Helper to format seconds into MM:SS
@@ -479,9 +501,6 @@ const AudioRecorder = (() => {
     // --- Public API ---
     return {
         init: init
-        // Expose start/stop for potential external control? Not needed currently.
-        // start: startRecording,
-        // stop: stopRecording
     };
 })();
 

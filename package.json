@@ -13,14 +13,14 @@
     "recorder",
     "openai",
     "whisper",
-    "transcription"
+    "transcription",
+    "clipboard"
   ],
   "author": "Your Name",
   "license": "ISC",
   "dependencies": {
     "dotenv": "^16.3.1",
     "electron": "^28.1.0",
-    "openai": "^4.24.1",
-    "robotjs": "^0.6.0"
+    "openai": "^4.24.1"
   }
 }

@@ -52,15 +52,15 @@ body {
 /* --- Visibility Control --- */
 /* Hide all states by default */
 .idle-state,
-.recording-state {
+.recording-state,
+.processing-state { /* Added processing-state */
     display: none;
     width: 100%;
-    /* Height is determined by content now, removing fixed height */
 }
 /* Show the active state based on the data-state attribute */
 .audio-recorder[data-state="idle"] .idle-state { display: flex; }
 .audio-recorder[data-state="recording"] .recording-state { display: flex; }
-/* Removed processing state visibility */
+.audio-recorder[data-state="processing"] .processing-state { display: flex; } /* Added processing-state */
 
 
 /* --- Idle State --- */
@@ -112,10 +112,60 @@ body {
     cursor: pointer;
     margin: 0 2px; /* Adjusted margin */
     transition: transform 0.1s ease;
+    -webkit-app-region: no-drag; /* Ensure icons aren't draggable */
 }
 .recording-state .icon-button circle { transition: fill 0.2s ease; }
 .recording-state .cancel-button:hover circle { fill: #777; }
 .recording-state .confirm-button:hover circle { fill: #f0f0f0; }
 .recording-state .icon-button:active { transform: scale(0.9); }
 
-/* Processing State View and Processing Bar styles removed */
+/* --- Processing State --- */
+.processing-state {
+    justify-content: center; /* Center the spinner horizontally */
+    align-items: center; /* Center the spinner vertically */
+    -webkit-app-region: drag; /* Allow dragging the bar */
+}
+
+.spinner-svg {
+    width: 30px; /* Adjust size as needed */
+    height: 30px;
+    animation: rotate 1.5s linear infinite;
+    -webkit-app-region: no-drag; /* Spinner itself is not draggable */
+}
+
+.spinner-circle {
+    fill: none;
+    stroke: #ffffff;
+    stroke-width: 8; /* Adjust thickness */
+    stroke-linecap: round;
+    stroke-dasharray: 200, 283; /* Adjust for desired arc length */
+    stroke-dashoffset: 0;
+    animation: dash 1.5s ease-in-out infinite;
+    transform-origin: center;
+}
+
+@keyframes rotate {
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes dash {
+    0% {
+        stroke-dasharray: 1, 283;
+        stroke-dashoffset: 0;
+    }
+    50% {
+        stroke-dasharray: 150, 283;
+        stroke-dashoffset: -100;
+    }
+    100% {
+        stroke-dasharray: 150, 283;
+        stroke-dashoffset: -283;
+    }
+}
+
+.processing-label { /* Optional styling if you add a label */
+    margin-left: 10px;
+    font-size: 0.9em;
+    color: #ccc;
+    -webkit-app-region: no-drag;
+}
