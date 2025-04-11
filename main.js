@@ -1,5 +1,5 @@
 // main.js
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron'); // <-- Import globalShortcut
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -24,13 +24,18 @@ const openai = new OpenAI({
 });
 // --- END OpenAI Setup ---
 
+let mainWindow = null; // <-- Keep a reference accessible outside createWindow
+
 function createWindow() {
-    const mainWindow = new BrowserWindow({
+    // Create the browser window but don't show it yet.
+    mainWindow = new BrowserWindow({ // <-- Assign to the outer mainWindow
         width: 380,
         height: 75,
         frame: false,
         resizable: false,
         alwaysOnTop: true,
+        show: false, // <--- Start hidden
+        skipTaskbar: true, // <-- Don't show in taskbar (Windows/Linux)
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -41,23 +46,111 @@ function createWindow() {
 
     mainWindow.loadFile('index.html');
 
-    if (!app.isPackaged) {
-        mainWindow.webContents.openDevTools({ mode: 'detach' });
-    }
+    // Optional: Open DevTools automatically if not packaged (only when window is shown)
+    // mainWindow.webContents.on('did-finish-load', () => {
+    //     if (!app.isPackaged) {
+    //         // Delay opening DevTools slightly until the window is potentially shown
+    //         // Or, open it only when shown via shortcut (more complex)
+    //     }
+    // });
+
+    // Dereference the window object when the window is closed
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
+
+     // Optionally hide the window when it loses focus (blur event)
+     mainWindow.on('blur', () => {
+         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+              console.log("Window blurred, hiding.");
+              mainWindow.hide();
+              // On macOS, you might uncomment app.hide() if you want the entire app
+              // including potential menu bar items to hide when focus is lost.
+              // if (process.platform === 'darwin') {
+              //     app.hide();
+              // }
+         }
+     });
 }
 
+// --- App Lifecycle ---
+
+// This method will be called when Electron has finished
+// initialization and is ready to create browser windows.
 app.whenReady().then(() => {
-    createWindow();
-    app.on('activate', function () {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // Hide the Dock icon on macOS
+    if (process.platform === 'darwin') {
+        app.dock.hide();
+    }
+
+    createWindow(); // Create the (hidden) window
+
+    // Register a global shortcut listener.
+    const ret = globalShortcut.register('CmdOrCtrl+Shift+R', () => {
+        console.log('CmdOrCtrl+Shift+R is pressed');
+        if (mainWindow) {
+            if (mainWindow.isVisible() && mainWindow.isFocused()) {
+                // If visible and focused, hide it
+                mainWindow.hide();
+                 // Optional: Hide the entire app on macOS when explicitly hidden
+                 // if (process.platform === 'darwin') {
+                 //     app.hide();
+                 // }
+            } else {
+                // Otherwise, show and focus it
+                mainWindow.show();
+                mainWindow.focus();
+                 // If you used app.hide() on macOS, you might need app.show() here too.
+            }
+        } else {
+            // If window was closed, maybe recreate it?
+            console.log("Main: Shortcut triggered but mainWindow is null.");
+            // createWindow(); // Uncomment to recreate if window was destroyed
+        }
     });
+
+    if (!ret) {
+        console.error('Main: globalShortcut registration failed');
+    } else {
+        console.log('Main: globalShortcut CmdOrCtrl+Shift+R registered successfully.');
+    }
+
+    // Note: The 'activate' event handler might not be relevant anymore
+    // since the Dock icon is hidden on macOS. We remove it or comment it out.
+    // app.on('activate', function () {
+    //     // On macOS it's common to re-create a window in the app when the
+    //     // dock icon is clicked and there are no other windows open.
+    //     if (BrowserWindow.getAllWindows().length === 0) {
+    //        // Since window starts hidden, maybe don't recreate here automatically
+    //        // createWindow();
+    //     } else if (mainWindow && !mainWindow.isVisible()) {
+    //         // Don't automatically show on activate if it was hidden
+    //         // mainWindow.show();
+    //         // mainWindow.focus();
+    //     }
+    // });
 });
 
+// Quit when all windows are closed, except on macOS.
 app.on('window-all-closed', function () {
-    if (process.platform !== 'darwin') app.quit();
+    // We might reach here if the window is closed via DevTools or programmatically.
+    // Since we only have one hidden window, closing it should probably quit the app
+    // unless we intend to recreate it with the shortcut.
+    // The current behavior (quit unless darwin) is probably fine.
+    if (process.platform !== 'darwin') {
+        app.quit();
+    }
 });
+
+// Unregister shortcuts when the application is about to quit.
+app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    console.log('Main: Unregistered all global shortcuts.');
+});
+
 
 // --- IPC Handler for Transcription ---
+// (Keep the existing ipcMain.handle('transcribe-audio', ...) handler as is)
 ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
     console.log('Main: Received audio data for transcription.');
 
@@ -95,7 +188,6 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
             console.log(`Main: Original audio saved to ${tempFilePathWebm} (Size: ${webmFileSize} bytes)`);
         } catch (statError) {
              console.warn(`Main: Could not get stats for temporary webm file ${tempFilePathWebm}: ${statError.message}`);
-             // Don't stop the process, but log the warning
         }
         // --- End WebM size logging ---
 
@@ -105,17 +197,14 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
 
         try {
             const { stdout, stderr } = await execPromise(ffmpegCommand);
-            if (stderr) {
-                console.warn('Main: ffmpeg reported warnings/errors:', stderr);
-            }
-            // ffmpeg stdout is usually empty with -hide_banner -loglevel error, but log if present
-            if (stdout) console.log('Main: ffmpeg conversion stdout:', stdout);
+            if (stderr) { console.warn('Main: ffmpeg reported warnings/errors:', stderr); }
+            if (stdout) { console.log('Main: ffmpeg conversion stdout:', stdout); }
 
             // Check if the output file was actually created and get its size
             try {
                  await fs.promises.access(tempFilePathMp3, fs.constants.F_OK);
-                 const mp3Stats = await fs.promises.stat(tempFilePathMp3); // Get stats
-                 mp3FileSize = mp3Stats.size; // Store size
+                 const mp3Stats = await fs.promises.stat(tempFilePathMp3);
+                 mp3FileSize = mp3Stats.size;
                  mp3FileCreated = true;
 
                  // --- Log MP3 file size and comparison ---
@@ -126,9 +215,7 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
                  }
                  // --- End MP3 size logging ---
 
-                 if (mp3FileSize === 0) {
-                    throw new Error("ffmpeg conversion resulted in an empty MP3 file.");
-                 }
+                 if (mp3FileSize === 0) { throw new Error("ffmpeg conversion resulted in an empty MP3 file."); }
             } catch (accessOrStatError) {
                  throw new Error(`ffmpeg command ran but output file not found, inaccessible, or stats failed for: ${tempFilePathMp3}. stderr: ${stderr}. Error: ${accessOrStatError.message}`);
             }
