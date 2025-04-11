@@ -30,12 +30,13 @@ function createWindow() {
     // Create the browser window but don't show it yet.
     mainWindow = new BrowserWindow({ // <-- Assign to the outer mainWindow
         width: 380,
-        height: 75,
+        height: 75, // Keep enough height for the recorder + potential transcription pop-up space
         frame: false,
         resizable: false,
         alwaysOnTop: true,
         show: false, // <--- Start hidden
         skipTaskbar: true, // <-- Don't show in taskbar (Windows/Linux)
+        transparent: true, // <--- ADD THIS LINE TO MAKE THE WINDOW BACKGROUND TRANSPARENT
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -61,14 +62,12 @@ function createWindow() {
 
      // Optionally hide the window when it loses focus (blur event)
      mainWindow.on('blur', () => {
+         // Blur behavior might need adjustment with transparent windows,
+         // especially on Linux. Test thoroughly.
          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
               console.log("Window blurred, hiding.");
               mainWindow.hide();
-              // On macOS, you might uncomment app.hide() if you want the entire app
-              // including potential menu bar items to hide when focus is lost.
-              // if (process.platform === 'darwin') {
-              //     app.hide();
-              // }
+              // if (process.platform === 'darwin') { app.hide(); } // Keep commented unless needed
          }
      });
 }

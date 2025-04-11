@@ -1,40 +1,44 @@
 /* --- General Styles --- */
 body {
-    background-color: transparent; /* Make body transparent for frameless window */
+    background-color: transparent; /* Already transparent, which is good */
     color: #eee;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
     justify-content: center;
-    align-items: flex-end; /* Align recorder to the bottom of the small window */
+    /* Align the recorder vertically centered within the window height */
+    align-items: center; /* CHANGED from flex-end */
     height: 100vh; /* Use viewport height */
     margin: 0;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    padding: 5px; /* Add slight padding around the edges */
+    /* padding: 5px; */ /* REMOVED THIS LINE */
     box-sizing: border-box;
 }
 
 .audio-recorder {
-    width: 100%; /* Take full width of the padded body */
-    height: 45px; /* Slightly reduced height for the main bar */
-    position: relative;
+    width: 100%; /* Take full width of the body */
+    /* Let height be determined by its content or specifically the recorder-state */
+    /* height: 45px; REMOVED - Let inner elements define height */
+    position: relative; /* Changed from absolute/relative for centering */
     box-sizing: border-box;
-    /* Remove margin-top, alignment handled by body */
+     max-width: 370px; /* Add a max-width slightly less than window width */
+     margin: 0 auto; /* Center horizontally */
 }
 
 /* --- State Containers --- */
+/* This defines the base pill style used in all states */
 .recorder-state {
     background-color: #444;
-    border-radius: 22.5px; /* Keep pill shape (height/2) */
-    height: 100%;
-    width: 100%;
+    border-radius: 22.5px; /* Keep pill shape */
+    height: 45px; /* DEFINE HEIGHT HERE */
+    width: 100%; /* Takes width from audio-recorder parent */
     box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 8px; /* Slightly reduced padding */
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); /* Adjusted shadow */
+    padding: 4px 8px; /* Keep padding inside the pill */
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
     /* If you want to make the bar draggable (uncomment in main.js too) */
     /* -webkit-app-region: drag; */
 }
@@ -46,21 +50,25 @@ body {
 
 
 /* --- Visibility Control --- */
+/* Hide all states by default */
 .idle-state,
 .recording-state,
 .processing-view {
     display: none;
     width: 100%;
-    height: 100%;
+    /* Height is determined by content now, removing fixed height */
 }
+/* Show the active state based on the data-state attribute */
 .audio-recorder[data-state="idle"] .idle-state { display: flex; }
 .audio-recorder[data-state="recording"] .recording-state { display: flex; }
-.audio-recorder[data-state="processing"] .processing-view { display: block; height: 100%; width: 100%; }
+.audio-recorder[data-state="processing"] .processing-view { display: block; position: relative; } /* Ensure processing-view establishes stacking context */
+
 
 /* --- Idle State --- */
 .idle-state {
+    /* .recorder-state styles apply */
     justify-content: flex-end;
-    padding-right: 10px; /* Reduced space */
+    padding-right: 10px; /* Override default padding */
 }
 .mic-icon-svg {
     width: 24px; /* Slightly smaller icon */
@@ -73,6 +81,9 @@ body {
 .mic-icon-svg:active { transform: scale(0.9); }
 
 /* --- Recording State --- */
+.recording-state {
+    /* .recorder-state styles apply */
+}
 .recording-state .waveform-canvas {
     flex-grow: 1;
     height: 35px; /* Reduced canvas height */
@@ -83,7 +94,7 @@ body {
     color: white;
     font-size: 0.8em; /* Smaller font */
     font-variant-numeric: tabular-nums;
-    position: absolute;
+    position: absolute; /* Position relative to .recording-state */
     right: 55px; /* Adjusted position */
     top: 50%;
     transform: translateY(-50%);
@@ -107,11 +118,7 @@ body {
 .recording-state .icon-button:active { transform: scale(0.9); }
 
 /* --- Processing State View --- */
-.processing-view {
-    position: relative;
-    width: 100%;
-    height: 100%;
-}
+/* .processing-view itself is just a container */
 
 .transcription-text {
     color: #ccc; /* Maintain color */
@@ -119,23 +126,25 @@ body {
     text-align: center;
     white-space: normal;
     overflow-wrap: break-word;
-    position: absolute;
+    position: absolute; /* Position relative to .processing-view */
     bottom: calc(100% + 5px); /* Place just above the recorder bar */
     left: 50%;
     transform: translateX(-50%);
-    width: 95%; /* Wider relative to the small window */
-    max-width: 360px; /* Limit max width */
-    background-color: rgba(42, 42, 42, 0.9); /* Slightly transparent background */
-    padding: 5px 8px; /* Adjusted padding */
-    border-radius: 5px; /* Slightly smaller radius */
+    /* Adjust width relative to the recorder, not the full window */
+    width: calc(100% - 10px); /* Slightly less than recorder width */
+    max-width: 360px; /* Keep max width limit */
+    background-color: rgba(42, 42, 42, 0.9);
+    padding: 5px 8px;
+    border-radius: 5px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
     z-index: 10;
     min-height: 1.2em;
-    line-height: 1.3; /* Slightly tighter line height */
+    line-height: 1.3;
     opacity: 0;
     transition: opacity 0.3s ease-in-out;
     pointer-events: none;
 }
+/* Show transcription text when processing or explicitly told to show */
 .audio-recorder[data-state="processing"] .transcription-text,
 .audio-recorder[data-state="idle"].show-transcription .transcription-text {
     opacity: 1;
@@ -145,10 +154,12 @@ body {
     background-color: rgba(92, 51, 51, 0.9); /* Dark red background with alpha */
 }
 
-/* Processing Bar specific adjustments */
+/* --- Processing Bar (Uses .recorder-state) --- */
+/* Select the .recorder-state specifically within the processing view if needed,
+   but usually the base .recorder-state styles are sufficient.
+   The class .processing-bar is added in HTML for potential specific targeting. */
 .processing-bar {
-    width: 100%;
-    height: 100%;
+     /* .recorder-state styles apply */
 }
 .processing-bar .waveform-canvas {
     flex-grow: 1;
