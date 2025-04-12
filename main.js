@@ -19,21 +19,33 @@ if (!gotTheLock) {
 } else {
     // --- This is the primary instance ---
 
-    // Optional: Listen for the 'second-instance' event. This fires when another
-    // instance tries to start but fails the lock check (gotTheLock was false for it).
     app.on('second-instance', (event, commandLine, workingDirectory) => {
-        console.log("Detected attempt to launch a second instance. Primary instance is handling it.");
-        // For this app, we might not need to do anything like focusing the window,
-        // as it's always on top and controlled by shortcut.
-        // If you wanted to bring the window to focus (if it exists):
-        // if (mainWindow) {
-        //   if (mainWindow.isMinimized()) mainWindow.restore();
-        //   mainWindow.focus(); // Might not work well with focusable: false
-        //   // Or maybe just show it if hidden:
-        //   if (!mainWindow.isVisible()) {
-        //       mainWindow.showInactive(); // Show without stealing focus
-        //   }
-        // }
+        console.log("Detected attempt to launch a second instance.");
+        console.log("Command line passed to second instance:", commandLine.join(' ')); // Log for debugging
+
+        // --- START MODIFICATION ---
+        // Check if the '--stop' argument was passed to the second instance
+        // process.argv for the *primary* instance won't have --stop here.
+        // We check the commandLine array received from the *second* instance.
+        if (commandLine.includes('--stop')) {
+            console.log("Received --stop argument from second instance. Quitting application gracefully.");
+            // Optional: Add any cleanup needed before quitting
+            // mainWindow = null; // Allow window to close naturally if needed
+            app.quit(); // Quit the primary instance
+        } else {
+            console.log("Second instance launched without --stop. Primary instance remains active.");
+            // Optional: Bring the main window to the front if it exists and you want that behavior
+            if (mainWindow) {
+              if (!mainWindow.isVisible()) {
+                  // Maybe show it, but maybe not for this app's behavior
+                  // mainWindow.showInactive();
+              }
+              // Focus might be disruptive for this app
+              // if (mainWindow.isMinimized()) mainWindow.restore();
+              // mainWindow.focus();
+            }
+        }
+        // --- END MODIFICATION ---
     });
 
     // --- OpenAI Setup ---
