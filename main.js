@@ -1,11 +1,9 @@
 // main.js
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard, screen } = require('electron'); // <-- ADD screen module
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 require('dotenv').config(); // Load .env variables
-
-// --- REMOVED: robotjs import and error handling ---
 
 // --- OpenAI Setup ---
 const OpenAI = require('openai');
@@ -22,34 +20,32 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
 }) : null;
 // --- END OpenAI Setup ---
 
+
 let mainWindow = null;
 
 function createWindow() {
-    // Get primary display work area dimensions (excludes taskbars/docks)
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
 
-    // Calculate the desired position based on the nested quadrants
-    // Target is the top-left corner of the "bottom-left of the top-right of the top-right" quadrant
-    const targetX = Math.round(width * 3 / 4); // 75% of width
-    const targetY = Math.round(height * 1 / 8); // 12.5% of height
+    const targetX = Math.round(width * 3 / 4);
+    const targetY = Math.round(height * 1 / 8);
 
-    // Define window dimensions (ensure these match your intended size)
     const windowWidth = 380;
     const windowHeight = 65;
 
     mainWindow = new BrowserWindow({
         width: windowWidth,
         height: windowHeight,
-        x: targetX, // <-- Set the calculated X position
-        y: targetY, // <-- Set the calculated Y position
+        x: targetX,
+        y: targetY,
         frame: false,
         resizable: false,
-        alwaysOnTop: true,
+        alwaysOnTop: true, // Keep this TRUE
         show: false,
         skipTaskbar: true,
         transparent: true,
-        acceptFirstMouse: true,
+        acceptFirstMouse: true, // Allows clicking buttons even if inactive
+        focusable: false, // *** ADDED: Prevents window from becoming focusable ***
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -64,25 +60,28 @@ function createWindow() {
         mainWindow = null;
     });
 
+    // --- REMOVED/COMMENTED OUT the 'blur' listener ---
+    /*
     mainWindow.on('blur', () => {
+        // This logic is removed because we WANT the window to stay open
+        // and potentially continue recording even when blurred.
+        // Stopping/hiding is now handled explicitly by the user action
+        // (shortcut again, or confirm/cancel buttons).
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-            console.log("Window blurred, attempting to cancel recording.");
-             // Tell renderer to stop recording if it's active when blurred (cancel)
-            mainWindow.webContents.send('trigger-stop-recording', false); // false = don't save/process
-            // Hiding now happens in renderer *after* stop sequence (cancel or process) finishes
-            // mainWindow.hide(); // <-- REMOVED direct hide on blur here
+             console.log("Window blurred, but taking NO automatic action.");
+            // mainWindow.webContents.send('trigger-stop-recording', false); // NO LONGER CANCEL ON BLUR
+            // mainWindow.hide(); // NO LONGER HIDE ON BLUR
         }
     });
+    */
 }
 
 // --- App Lifecycle ---
 
 app.whenReady().then(() => {
-    // Exit if OpenAI key is missing
     if (!openai) {
         console.error("Exiting due to missing OpenAI key.");
-        // Dialog was shown on startup
-        return; // Stop further initialization
+        return;
     }
 
     if (process.platform === 'darwin') {
@@ -94,15 +93,20 @@ app.whenReady().then(() => {
     const ret = globalShortcut.register('CmdOrCtrl+Shift+R', () => {
         console.log('Shortcut CmdOrCtrl+Shift+R pressed');
         if (mainWindow) {
-            if (mainWindow.isVisible() && mainWindow.isFocused()) {
-                console.log("Main: Window visible and focused, stopping recording (if active) and processing.");
+            // Check if window is visible AND if recording is *active* in the renderer
+            // We need a way to know the renderer's state, but main doesn't know directly.
+            // Let's simplify: If the window is visible, the shortcut means STOP.
+            // If the window is hidden, the shortcut means START.
+            if (mainWindow.isVisible()) {
+                console.log("Main: Window visible, assuming stop recording & process.");
                 // Tell renderer to stop recording and process
                 mainWindow.webContents.send('trigger-stop-recording', true); // true = save and process
-                // Hiding will happen in the renderer *after* processing is complete
+                // Hiding will happen in the renderer *after* processing is complete or on cancel.
             } else {
-                console.log("Main: Window not visible or not focused, showing and triggering record.");
-                mainWindow.show();
-                mainWindow.focus();
+                console.log("Main: Window not visible, showing inactive and triggering record.");
+                // *** CHANGED: Use showInactive() and remove focus() ***
+                mainWindow.showInactive(); // Show without activating/focusing
+                // mainWindow.focus(); // <-- REMOVED
                  setTimeout(() => {
                     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
                        console.log("Main: Sending trigger-start-recording to renderer.");
@@ -110,21 +114,22 @@ app.whenReady().then(() => {
                     } else {
                         console.log("Main: Window closed or hidden before start trigger could be sent.");
                     }
-                 }, 100);
+                 }, 100); // Keep slight delay
             }
         } else {
             console.log("Main: Shortcut triggered but mainWindow is null. Recreating.");
             createWindow();
              if (mainWindow) {
                  mainWindow.once('ready-to-show', () => {
-                     mainWindow.show();
-                     mainWindow.focus();
+                     // *** CHANGED: Use showInactive() and remove focus() ***
+                     mainWindow.showInactive(); // Show without activating/focusing
+                     // mainWindow.focus(); // <-- REMOVED
                      setTimeout(() => {
                         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
                            console.log("Main: Sending trigger-start-recording to renderer after recreation.");
                            mainWindow.webContents.send('trigger-start-recording');
                         }
-                     }, 100);
+                     }, 100); // Keep slight delay
                  });
              }
         }
@@ -235,7 +240,6 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
              }
              throw new Error(`ffmpeg conversion failed: ${errorDetail}`);
         }
-
 
         // 3. Send *converted* MP3 file to OpenAI
         console.log('Main: Sending converted MP3 to OpenAI...');
