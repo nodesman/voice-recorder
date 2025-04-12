@@ -24,6 +24,7 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
 // --- END OpenAI Setup ---
 
 let mainWindow = null;
+let isProcessingShortcut = false; // <-- ADD THIS FLAG
 
 function createWindow() {
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -80,41 +81,98 @@ app.whenReady().then(() => {
         app.dock.hide();
     }
 
-    createWindow();
+    createWindow(); // Create initial window
 
     const ret = globalShortcut.register('CmdOrCtrl+Shift+R', () => {
         console.log('Shortcut CmdOrCtrl+Shift+R pressed');
-        if (mainWindow) {
-            if (mainWindow.isVisible()) {
-                console.log("Main: Window visible, assuming stop recording & process.");
-                mainWindow.webContents.send('trigger-stop-recording', true); // true = save and process
-            } else {
-                console.log("Main: Window not visible, showing inactive and triggering record.");
-                mainWindow.showInactive();
-                 setTimeout(() => {
-                    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-                       console.log("Main: Sending trigger-start-recording to renderer.");
-                       mainWindow.webContents.send('trigger-start-recording');
-                    } else {
-                        console.log("Main: Window closed or hidden before start trigger could be sent.");
-                    }
-                 }, 100); // Keep slight delay
-            }
-        } else {
-            console.log("Main: Shortcut triggered but mainWindow is null. Recreating.");
-            createWindow();
-             if (mainWindow) {
-                 mainWindow.once('ready-to-show', () => {
-                     mainWindow.showInactive();
-                     setTimeout(() => {
-                        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-                           console.log("Main: Sending trigger-start-recording to renderer after recreation.");
-                           mainWindow.webContents.send('trigger-start-recording');
-                        }
-                     }, 100);
-                 });
-             }
+
+        // --- ADD LOCK CHECK ---
+        if (isProcessingShortcut) {
+            console.log('Main: Shortcut handling already in progress. Skipping.');
+            return;
         }
+        // --- SET LOCK ---
+        isProcessingShortcut = true;
+        console.log('Main: Acquired shortcut lock.');
+
+        // Use a try...catch block to ensure the lock is released
+        try {
+            if (mainWindow) {
+                if (mainWindow.isDestroyed()) { // Handle case where window was closed unexpectedly
+                    console.log("Main: mainWindow was destroyed. Recreating.");
+                    mainWindow = null; // Reset mainWindow
+                    createWindow();
+                    // Set up window to show and start recording once ready
+                    if (mainWindow) {
+                        mainWindow.once('ready-to-show', () => {
+                            mainWindow.showInactive();
+                            setTimeout(() => {
+                                if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                                    console.log("Main: Sending trigger-start-recording after recreation.");
+                                    mainWindow.webContents.send('trigger-start-recording');
+                                }
+                                // Release lock AFTER async operation completes
+                                isProcessingShortcut = false;
+                                console.log('Main: Released shortcut lock (after recreate/start timer).');
+                            }, 100);
+                        });
+                    } else {
+                        // If creation failed immediately, release lock
+                         isProcessingShortcut = false;
+                         console.log('Main: Released shortcut lock (createWindow failed).');
+                    }
+                } else if (mainWindow.isVisible()) {
+                    console.log("Main: Window visible, assuming stop recording & process.");
+                    mainWindow.webContents.send('trigger-stop-recording', true); // true = save and process
+                    // Release lock immediately after sending stop command
+                    isProcessingShortcut = false;
+                    console.log('Main: Released shortcut lock (after sending stop).');
+                } else {
+                    console.log("Main: Window not visible, showing inactive and triggering record.");
+                    mainWindow.showInactive();
+                    setTimeout(() => {
+                        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                           console.log("Main: Sending trigger-start-recording to renderer.");
+                           mainWindow.webContents.send('trigger-start-recording');
+                        } else {
+                            console.log("Main: Window closed or hidden before start trigger could be sent.");
+                        }
+                        // Release lock AFTER async operation completes
+                        isProcessingShortcut = false;
+                        console.log('Main: Released shortcut lock (after show/start timer).');
+                    }, 100); // Keep slight delay
+                }
+            } else {
+                // This case handles if the app is running but the window was closed
+                console.log("Main: Shortcut triggered but mainWindow is null. Recreating.");
+                createWindow();
+                 if (mainWindow) {
+                     mainWindow.once('ready-to-show', () => {
+                         mainWindow.showInactive();
+                         setTimeout(() => {
+                            if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                               console.log("Main: Sending trigger-start-recording to renderer after recreation.");
+                               mainWindow.webContents.send('trigger-start-recording');
+                            }
+                             // Release lock AFTER async operation completes
+                            isProcessingShortcut = false;
+                            console.log('Main: Released shortcut lock (after recreate/start timer - null path).');
+                         }, 100);
+                     });
+                 } else {
+                    // If creation failed immediately, release lock
+                    isProcessingShortcut = false;
+                    console.log('Main: Released shortcut lock (createWindow failed - null path).');
+                 }
+            }
+        } catch (error) {
+            console.error("Main: Error during shortcut handling:", error);
+            // --- ENSURE LOCK RELEASE ON ERROR ---
+            isProcessingShortcut = false;
+            console.log('Main: Released shortcut lock due to error.');
+        }
+        // --- REMOVE IMMEDIATE LOCK RELEASE HERE ---
+        // isProcessingShortcut = false; // <-- Remove this immediate release
     });
 
     if (!ret) {
@@ -138,7 +196,7 @@ app.on('will-quit', () => {
 
 ipcMain.on('hide-window', () => {
     console.log("Main: Received hide-window request from renderer.");
-    if (mainWindow && mainWindow.isVisible()) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) { // Added !isDestroyed check
         mainWindow.hide();
     }
 });
@@ -227,7 +285,7 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
                      // Clean up and return immediately
                      if (webmFileWritten) await fs.promises.unlink(tempFilePathWebm).catch(e => console.error("Cleanup Error:", e));
                      // mp3 file might exist but is empty, delete it too
-                     await fs.promises.unlink(tempFilePathMp3).catch(e => console.error("Cleanup Error:", e));
+                     try { await fs.promises.unlink(tempFilePathMp3); } catch(e) { console.warn("Cleanup Warning: Could not delete empty mp3.", e.message); }
                      return operationStatus;
                  }
                  mp3FileCreated = true;
