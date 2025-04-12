@@ -4,6 +4,9 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 require('dotenv').config(); // Load .env variables
+const { exec } = require('child_process'); // Moved exec require to top for clarity
+const util = require('util');             // Moved util require to top for clarity
+const execPromise = util.promisify(exec); // Create a promisified version of exec
 
 // --- OpenAI Setup ---
 const OpenAI = require('openai');
@@ -19,7 +22,6 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 // --- END OpenAI Setup ---
-
 
 let mainWindow = null;
 
@@ -62,17 +64,7 @@ function createWindow() {
 
     // --- REMOVED/COMMENTED OUT the 'blur' listener ---
     /*
-    mainWindow.on('blur', () => {
-        // This logic is removed because we WANT the window to stay open
-        // and potentially continue recording even when blurred.
-        // Stopping/hiding is now handled explicitly by the user action
-        // (shortcut again, or confirm/cancel buttons).
-        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-             console.log("Window blurred, but taking NO automatic action.");
-            // mainWindow.webContents.send('trigger-stop-recording', false); // NO LONGER CANCEL ON BLUR
-            // mainWindow.hide(); // NO LONGER HIDE ON BLUR
-        }
-    });
+    mainWindow.on('blur', () => { ... }); // Keep this commented out
     */
 }
 
@@ -93,20 +85,12 @@ app.whenReady().then(() => {
     const ret = globalShortcut.register('CmdOrCtrl+Shift+R', () => {
         console.log('Shortcut CmdOrCtrl+Shift+R pressed');
         if (mainWindow) {
-            // Check if window is visible AND if recording is *active* in the renderer
-            // We need a way to know the renderer's state, but main doesn't know directly.
-            // Let's simplify: If the window is visible, the shortcut means STOP.
-            // If the window is hidden, the shortcut means START.
             if (mainWindow.isVisible()) {
                 console.log("Main: Window visible, assuming stop recording & process.");
-                // Tell renderer to stop recording and process
                 mainWindow.webContents.send('trigger-stop-recording', true); // true = save and process
-                // Hiding will happen in the renderer *after* processing is complete or on cancel.
             } else {
                 console.log("Main: Window not visible, showing inactive and triggering record.");
-                // *** CHANGED: Use showInactive() and remove focus() ***
-                mainWindow.showInactive(); // Show without activating/focusing
-                // mainWindow.focus(); // <-- REMOVED
+                mainWindow.showInactive();
                  setTimeout(() => {
                     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
                        console.log("Main: Sending trigger-start-recording to renderer.");
@@ -121,15 +105,13 @@ app.whenReady().then(() => {
             createWindow();
              if (mainWindow) {
                  mainWindow.once('ready-to-show', () => {
-                     // *** CHANGED: Use showInactive() and remove focus() ***
-                     mainWindow.showInactive(); // Show without activating/focusing
-                     // mainWindow.focus(); // <-- REMOVED
+                     mainWindow.showInactive();
                      setTimeout(() => {
                         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
                            console.log("Main: Sending trigger-start-recording to renderer after recreation.");
                            mainWindow.webContents.send('trigger-start-recording');
                         }
-                     }, 100); // Keep slight delay
+                     }, 100);
                  });
              }
         }
@@ -162,16 +144,15 @@ ipcMain.on('hide-window', () => {
 });
 
 // --- IPC Handler for Transcription & Copying ---
-ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Kept same channel name
+ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
     console.log('Main: Received audio data for transcription and copying.');
     let operationStatus = { success: false, error: null };
 
-    // --- REMOVED: robotjs check ---
     if (!openai) {
         const errorMsg = "OpenAI API key not configured. Cannot transcribe.";
         console.error("Main:", errorMsg);
         operationStatus.error = errorMsg;
-        return operationStatus; // Return error status
+        return operationStatus;
     }
 
     if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
@@ -182,12 +163,12 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
 
     const timestamp = Date.now();
     const tempFileNameWebm = `rec-input-${timestamp}.webm`;
-    const tempFileNameMp3 = `rec-output-${timestamp}.mp3`; // Changed target format
+    const tempFileNameMp3 = `rec-output-${timestamp}.mp3`;
     const tempFilePathWebm = path.join(os.tmpdir(), tempFileNameWebm);
-    const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3); // Changed path
+    const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3);
 
     let webmFileWritten = false;
-    let mp3FileCreated = false; // Track the mp3 file
+    let mp3FileCreated = false;
 
     try {
         // 1. Save original buffer
@@ -199,50 +180,76 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
         webmFileWritten = true;
         console.log(`Main: Original audio saved to ${tempFilePathWebm} (Size: ${nodeBuffer.length} bytes)`);
 
-        // 2. Convert .webm to .mp3 using ffmpeg (Requires ffmpeg in PATH)
-        const { exec } = require('child_process'); // Keep exec require scoped here or move to top
-        const util = require('util'); // Keep util require scoped here or move to top
+        // 2. Convert .webm to .mp3 AND remove silence using ffmpeg
+        //    -af "silenceremove=...": Adds the audio filter for silence removal.
+        //      - start_periods=1: Removes silence from the beginning.
+        //      - start_duration=0.5: Silence must be at least 0.5 seconds long to be removed at the start.
+        //      - start_threshold=-35dB: Audio below -35dB is considered silence (adjust as needed).
+        //      - stop_periods=-1: Removes *all* periods of silence from the end meeting criteria.
+        //      - stop_duration=0.5: Silence must be at least 0.5 seconds long to be removed at the end.
+        //      - stop_threshold=-35dB: Same threshold for the end.
+        //      - detection=peak: Use peak volume detection (often better for voice).
+        //    Other options:
+        //      -vn: No video output.
+        //      -acodec libmp3lame: Encode audio to MP3.
+        //      -ab 48k: Audio bitrate (adjust for quality vs size tradeoff).
+        //      -ar 16000: Audio sample rate (Whisper prefers 16kHz).
+        //      -ac 1: Mono audio channel.
+        //      -y: Overwrite output file without asking.
+        //      -hide_banner -loglevel error: Reduce console noise from ffmpeg.
+        const silenceFilter = "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-35dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-35dB:detection=peak";
+        const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -af "${silenceFilter}" -acodec libmp3lame -ab 48k -ar 16000 -ac 1 -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
 
-        const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -acodec libmp3lame -ab 48k -ar 16000 -ac 1 -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
-        console.log('Main: Executing ffmpeg:', ffmpegCommand);
+        console.log('Main: Executing ffmpeg with silence removal:', ffmpegCommand);
         try {
-           await new Promise((resolve, reject) => {
-                exec(ffmpegCommand, (error, stdout, stderr) => {
-                    if (error) {
-                        console.error(`Main: ffmpeg exec error: ${error.message}`);
-                        console.error(`Main: ffmpeg stderr: ${stderr}`);
-                        reject(new Error(`ffmpeg failed: ${stderr || error.message}`));
-                        return;
-                    }
-                     if (stderr && !stderr.includes('Output file is empty')) { // Ignore specific harmless stderr messages if needed
-                         console.warn(`Main: ffmpeg stderr output: ${stderr}`);
-                    }
-                    console.log(`Main: ffmpeg stdout: ${stdout}`);
-                    resolve();
-                });
-            });
+            // Use the promisified exec for cleaner async/await
+            const { stdout, stderr } = await execPromise(ffmpegCommand);
+
+            if (stderr && !stderr.includes('Output file is empty')) { // Ignore specific harmless stderr messages if needed
+                console.warn(`Main: ffmpeg stderr output: ${stderr}`);
+           } else if (stderr) {
+                console.log(`Main: ffmpeg stderr contained 'Output file is empty' (may be expected if silence removed everything).`);
+           }
+           if (stdout) {
+                console.log(`Main: ffmpeg stdout: ${stdout}`);
+           }
 
             // Check if the output file was actually created and has size
             try {
                  await fs.promises.access(tempFilePathMp3, fs.constants.F_OK);
                  const mp3Stats = await fs.promises.stat(tempFilePathMp3);
-                 if (mp3Stats.size === 0) { throw new Error("ffmpeg conversion resulted in an empty MP3 file."); }
+                 if (mp3Stats.size === 0) {
+                     // Silence removal might result in an empty file if the input was entirely silent
+                     // or below the threshold. Treat this as a non-error, but don't proceed.
+                     console.log("Main: ffmpeg conversion resulted in an empty MP3 file (likely due to silence removal). Skipping transcription.");
+                     operationStatus.success = true; // Indicate success (no error), but nothing was transcribed/copied
+                     operationStatus.error = "Recording contained only silence or was too quiet after trimming."; // Optional info message
+                     // Clean up and return immediately
+                     if (webmFileWritten) await fs.promises.unlink(tempFilePathWebm).catch(e => console.error("Cleanup Error:", e));
+                     // mp3 file might exist but is empty, delete it too
+                     await fs.promises.unlink(tempFilePathMp3).catch(e => console.error("Cleanup Error:", e));
+                     return operationStatus;
+                 }
                  mp3FileCreated = true;
-                 console.log(`Main: Converted audio saved to ${tempFilePathMp3} (Size: ${mp3Stats.size} bytes)`);
+                 console.log(`Main: Converted and trimmed audio saved to ${tempFilePathMp3} (Size: ${mp3Stats.size} bytes)`);
             } catch (accessOrStatError) {
-                 throw new Error(`ffmpeg command may have run but output file not found or empty: ${tempFilePathMp3}. Error: ${accessOrStatError.message}`);
+                 throw new Error(`ffmpeg command may have run but output file not found or is inaccessible: ${tempFilePathMp3}. Error: ${accessOrStatError.message}`);
             }
         } catch (ffmpegError) {
              console.error('Main: ffmpeg processing failed:', ffmpegError);
-             const errorDetail = ffmpegError.message || 'Unknown ffmpeg error';
+             let errorDetail = ffmpegError.message || 'Unknown ffmpeg error';
+             // Include stderr in the error message if available, as it's often helpful
+             if (ffmpegError.stderr) {
+                errorDetail += `\nFFmpeg stderr: ${ffmpegError.stderr}`;
+             }
              if (errorDetail.toLowerCase().includes('command not found') || errorDetail.includes('enoent')) {
                   throw new Error('ffmpeg command not found. Ensure ffmpeg is installed and in your system PATH.');
              }
-             throw new Error(`ffmpeg conversion failed: ${errorDetail}`);
+             throw new Error(`ffmpeg processing failed: ${errorDetail}`);
         }
 
-        // 3. Send *converted* MP3 file to OpenAI
-        console.log('Main: Sending converted MP3 to OpenAI...');
+        // 3. Send *converted and trimmed* MP3 file to OpenAI
+        console.log('Main: Sending trimmed MP3 to OpenAI...');
         const transcription = await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempFilePathMp3), // Use MP3 path
             model: 'whisper-1',
@@ -255,22 +262,22 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
         if (transcribedText && transcribedText.length > 0) {
             try {
                 console.log("Main: Copying text to clipboard...");
-                clipboard.writeText(transcribedText); // <-- Use clipboard API
+                clipboard.writeText(transcribedText);
                 console.log("Main: Copying finished.");
                 operationStatus.success = true; // Mark success *after* copying
             } catch (copyError) {
                  console.error("Main: Clipboard write failed:", copyError);
                  const copyErrorMsg = `Transcription succeeded but copying failed: ${copyError.message}.`;
-                 dialog.showErrorBox("Copying Error", copyErrorMsg); // Inform user
+                 dialog.showErrorBox("Copying Error", copyErrorMsg);
                  operationStatus.error = copyErrorMsg;
-                 operationStatus.success = false; // Copy failed
+                 operationStatus.success = false;
             }
         } else {
             console.log("Main: Transcription result was empty, nothing to copy.");
             operationStatus.success = true; // Process finished successfully, even if nothing copied
         }
 
-        // 5. Return the status (Renderer will handle hiding window)
+        // 5. Return the status
         return operationStatus;
 
     } catch (error) {
@@ -280,12 +287,15 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
             console.error(`OpenAI API Error: Status=${error.status}, Type=${error.type}, Code=${error.code}, Message=${error.message}`);
             errorMessage = `OpenAI Error (${error.status}): ${error.message || 'Failed to transcribe.'}`;
         } else if (error instanceof Error) {
-            errorMessage = error.message;
+            errorMessage = error.message; // Use the specific error message (e.g., from ffmpeg or file access)
         }
-        dialog.showErrorBox("Processing Failed", errorMessage); // Show error dialog
+        // Avoid showing the "silence" message as a blocking error dialog
+        if (errorMessage !== "Recording contained only silence or was too quiet after trimming.") {
+           dialog.showErrorBox("Processing Failed", errorMessage);
+        }
         operationStatus.error = errorMessage;
         operationStatus.success = false;
-        return operationStatus; // Return error status
+        return operationStatus;
 
     } finally {
         // 6. Clean up temporary files
@@ -294,7 +304,7 @@ ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => { // Ke
                 .then(() => console.log(`Main: Deleted temp webm file ${tempFilePathWebm}`))
                 .catch(err => console.error(`Main: Failed to delete temp webm file ${tempFilePathWebm}:`, err));
         }
-        if (mp3FileCreated) { // Cleanup mp3 file
+        if (mp3FileCreated) { // Only attempt delete if we know it was created successfully (and wasn't empty due to silence)
             fs.promises.unlink(tempFilePathMp3)
                 .then(() => console.log(`Main: Deleted temp mp3 file ${tempFilePathMp3}`))
                 .catch(err => console.error(`Main: Failed to delete temp mp3 file ${tempFilePathMp3}:`, err));
