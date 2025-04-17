@@ -16,3 +16,6 @@ Thumbs.db
 .kaichats
 
 package-lock.json
+
+# Kai specific logs (auto-added)
+.kai/logs/

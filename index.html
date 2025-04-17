@@ -21,7 +21,7 @@
 
         <!-- Recording State: Controls, Waveform, Timer -->
         <div class="recorder-state recording-state">
-            <svg class="icon-button cancel-button" id="cancelButton" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <svg class="icon-button cancel-button" id="cancelRecordingButton" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"> <!-- Renamed ID for clarity -->
               <circle cx="50" cy="50" r="48" fill="#555555"/>
               <line x1="30" y1="30" x2="70" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
               <line x1="70" y1="30" x2="30" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
@@ -34,16 +34,37 @@
             </svg>
         </div>
 
-        <!-- NEW: Processing State: Spinner -->
+        <!-- Processing State: Spinner -->
         <div class="recorder-state processing-state">
              <svg class="spinner-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
                  <circle class="spinner-circle" cx="50" cy="50" r="45"/>
              </svg>
-             <!-- Optional Label -->
              <!-- <span class="processing-label">Processing...</span> -->
         </div>
 
+        <!-- NEW: Error State: Retry/Cancel -->
+        <div class="recorder-state error-state">
+            <svg class="icon-button cancel-button" id="cancelErrorButton" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <!-- Using the same cancel icon -->
+              <circle cx="50" cy="50" r="48" fill="#555555"/>
+              <line x1="30" y1="30" x2="70" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
+              <line x1="70" y1="30" x2="30" y2="70" stroke="white" stroke-width="10" stroke-linecap="round"/>
+            </svg>
+            <span class="error-message" id="errorMessage">Transcription Failed</span> <!-- Placeholder for message -->
+            <svg class="icon-button retry-button" id="retryButton" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                 <use href="#retry-icon-svg" fill="#FFFFFF"/> <!-- Use the symbol defined below -->
+            </svg>
+        </div>
+
     </div>
+
+    <!-- Retry Icon Definition (place anywhere in body, often at the end) -->
+    <svg width="0" height="0" style="position:absolute">
+      <symbol id="retry-icon-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M17.65,6.35 C16.2,4.9 14.21,4 12,4 c-4.42,0 -7.99,3.58 -7.99,8 s3.57,8 7.99,8 c3.73,0 6.84,-2.55 7.73,-6 h-2.08 c-0.82,2.33 -3.04,4 -5.65,4 c-3.31,0 -6,-2.69 -6,-6 s2.69,-6 6,-6 c1.66,0 3.14,0.69 4.22,1.78 L13,11 h7 V4 l-2.35,2.35 z"/>
+        <path d="M0 0h24v24H0z" fill="none"/>
+      </symbol>
+    </svg>
 
     <!-- Link the Renderer JavaScript -->
     <script src="renderer.js"></script>

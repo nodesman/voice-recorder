@@ -53,7 +53,8 @@ body {
 /* Hide all states by default */
 .idle-state,
 .recording-state,
-.processing-state { /* Added processing-state */
+.processing-state, /* Added processing-state */
+.error-state {      /* Added error-state */
     display: none;
     width: 100%;
 }
@@ -61,6 +62,7 @@ body {
 .audio-recorder[data-state="idle"] .idle-state { display: flex; }
 .audio-recorder[data-state="recording"] .recording-state { display: flex; }
 .audio-recorder[data-state="processing"] .processing-state { display: flex; } /* Added processing-state */
+.audio-recorder[data-state="error"] .error-state { display: flex; }          /* Added error-state */
 
 
 /* --- Idle State --- */
@@ -126,6 +128,65 @@ body {
     -webkit-app-region: drag; /* Allow dragging the bar */
 }
 
+/* --- Error State --- */
+.error-state {
+    /* .recorder-state styles apply */
+    align-items: center;
+    justify-content: space-between; /* Align items with space */
+    padding: 4px 10px; /* Adjust padding */
+    -webkit-app-region: drag; /* Allow dragging */
+}
+
+.error-state .cancel-button { /* Style cancel button within error state */
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-right: 8px; /* Space between cancel and message */
+    transition: transform 0.1s ease;
+    -webkit-app-region: no-drag;
+}
+.error-state .cancel-button:hover circle { fill: #777; }
+.error-state .cancel-button:active { transform: scale(0.9); }
+
+.error-state .error-message {
+    color: #ffdddd; /* Light red for error text */
+    font-size: 0.85em;
+    text-align: center;
+    flex-grow: 1; /* Allow message to take up space */
+    margin: 0 8px; /* Space around message */
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    -webkit-app-region: no-drag; /* Text not draggable */
+    pointer-events: none; /* Prevent text selection interfering */
+}
+
+.error-state .retry-button {
+    width: 30px; /* Adjust size */
+    height: 30px;
+    fill: #FFFFFF; /* White icon */
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: transform 0.1s ease, fill 0.2s ease;
+    -webkit-app-region: no-drag;
+    padding: 2px; /* Add padding to make click target slightly larger */
+    border-radius: 50%; /* Make hover effect circular */
+    background-color: transparent;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.error-state .retry-button:hover {
+    /* background-color: rgba(255, 255, 255, 0.2); */ /* Subtle hover */
+     transform: rotate(90deg) scale(1.1); /* Add slight rotation on hover */
+}
+
+.error-state .retry-button:active {
+    transform: scale(0.9) rotate(0deg); /* Reset rotation during click */
+}
+
+
+/* --- Spinner Styles --- */
 .spinner-svg {
     width: 30px; /* Adjust size as needed */
     height: 30px;

@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * Sends audio data (as Uint8Array) to the main process for transcription & copying.
-     * Returns a Promise that resolves with { success: true } or { success: false, error: '...' }.
+     * Returns a Promise that resolves with { success: true } or { success: false, error: '...', retryable?: boolean }.
      */
     transcribeAndCopy: (audioDataUint8Array) => { // Renamed function
         if (!audioDataUint8Array || !(audioDataUint8Array instanceof Uint8Array)) {
@@ -24,6 +24,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
         console.log("Preload: Sending hide-window request to main.");
         ipcRenderer.send('hide-window'); // Use send for one-way command
     },
+
+    /**
+     * Tells the main process to attempt transcription again using the previously failed audio file.
+     * Returns a Promise resolving with the result: { success: true } or { success: false, error: '...', retryable?: boolean }.
+     */
+    retryTranscription: () => {
+        console.log("Preload: Sending retry-transcription request to main.");
+        return ipcRenderer.invoke('retry-transcription'); // Use invoke for response
+    },
+
+    /**
+     * Tells the main process to cancel the pending retry (delete temp file, hide window).
+     */
+    cancelRetry: () => {
+        console.log("Preload: Sending cancel-retry request to main.");
+        ipcRenderer.send('cancel-retry'); // Use send for one-way command
+    },
+
 
     /**
      * Listens for a trigger from the main process to start recording.
