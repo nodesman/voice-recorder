@@ -19,3 +19,6 @@ package-lock.json
 
 # Kai specific logs (auto-added)
 .kai/logs/
+
+# Kai internal files (logs, cache, config) - (auto-added by Kai)
+.kai/

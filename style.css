@@ -128,6 +128,16 @@ body {
     -webkit-app-region: drag; /* Allow dragging the bar */
 }
 
+/* NEW: Styles for the processing info text */
+.processing-state .processing-info {
+    font-size: 0.75em; /* Smaller text */
+    color: #cccccc;
+    margin-right: 10px; /* Space between text and spinner */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    -webkit-app-region: no-drag; /* Text not draggable */
+}
 /* --- Error State --- */
 .error-state {
     /* .recorder-state styles apply */

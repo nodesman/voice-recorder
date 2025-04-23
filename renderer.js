@@ -8,6 +8,7 @@ if (typeof window.electronAPI?.transcribeAndCopy !== 'function' ||
     typeof window.electronAPI?.onTriggerStopRecording !== 'function' ||
     // NEW: Check retry/cancel APIs
     typeof window.electronAPI?.retryTranscription !== 'function' ||
+    typeof window.electronAPI?.onFfmpegProgress !== 'function' || // Check new listener
     typeof window.electronAPI?.cancelRetry !== 'function') {
     console.error("Electron API functions missing! Check preload script, contextIsolation, and main process IPC handlers (including new retry/cancel).");
     alert("Critical Error: Cannot communicate with the main process correctly. Functionality may be broken. Please check logs or restart.");
@@ -30,6 +31,7 @@ const AudioRecorder = (() => {
     // NEW: Error state elements
     let cancelErrorButton;
     let retryButton;
+    let processingInfo; // NEW: Element for ffmpeg info
     let errorMessage;
 
     // --- Audio & State Variables ---
@@ -60,10 +62,11 @@ const AudioRecorder = (() => {
         // NEW: Find error state elements
         cancelErrorButton = document.getElementById('cancelErrorButton');
         retryButton = document.getElementById('retryButton');
+        processingInfo = document.getElementById('processingInfo'); // Get the new element
         errorMessage = document.getElementById('errorMessage');
 
 
-        if (!recorderContainer || !micButton || !cancelRecordingButton || !confirmButton || !recordingCanvas || !timerDisplay || !cancelErrorButton || !retryButton || !errorMessage) {
+        if (!recorderContainer || !micButton || !cancelRecordingButton || !confirmButton || !recordingCanvas || !timerDisplay || !cancelErrorButton || !retryButton || !errorMessage || !processingInfo) {
             console.error("Recorder UI elements not found! Check IDs in index.html (including error state).");
             return;
         }
@@ -74,6 +77,7 @@ const AudioRecorder = (() => {
             typeof window.electronAPI?.onTriggerStartRecording === 'function' &&
             typeof window.electronAPI?.onTriggerStopRecording === 'function' &&
             // NEW: Check retry/cancel APIs
+            typeof window.electronAPI?.onFfmpegProgress === 'function' &&
             typeof window.electronAPI?.retryTranscription === 'function' &&
             typeof window.electronAPI?.cancelRetry === 'function') {
 
@@ -88,6 +92,9 @@ const AudioRecorder = (() => {
             // Listen for triggers from main process
             window.electronAPI.onTriggerStartRecording(handleTriggerStart);
             window.electronAPI.onTriggerStopRecording(handleTriggerStop);
+
+            // Listen for ffmpeg progress updates
+            window.electronAPI.onFfmpegProgress(handleFfmpegProgress);
 
             console.log("Audio Recorder Initialized and listeners added.");
         } else {
@@ -106,6 +113,10 @@ const AudioRecorder = (() => {
         if (currentState === newState) return; // Avoid unnecessary changes
         console.log(`State changing from ${currentState} to ${newState}`);
         currentState = newState;
+        // Clear processing info when NOT in processing state
+        if (newState !== 'processing' && processingInfo) {
+            processingInfo.textContent = '';
+        }
         recorderContainer.dataset.state = newState;
         isRecording = (newState === 'recording'); // Keep isRecording flag sync'd
     }
@@ -208,6 +219,7 @@ const AudioRecorder = (() => {
         // Transition to 'processing' state *only* if saving.
         // If cancelling, handleStop will transition directly to 'idle'.
         if (shouldSaveAndProcess) {
+            if (processingInfo) processingInfo.textContent = 'Converting...'; // Initial message
             setState('processing');
         }
 
@@ -376,6 +388,16 @@ const AudioRecorder = (() => {
         setState('idle'); // Go back to idle state
     }
 
+    // --- NEW: Ffmpeg Progress Handler ---
+    function handleFfmpegProgress(data) {
+        console.log("Renderer: Received ffmpeg progress:", data);
+        if (currentState === 'processing' && processingInfo && data) {
+             const { originalFormatted, convertedFormatted, reductionPercent } = data;
+             // Example: "WebM: 1.2MB -> MP3: 180KB (85% smaller)"
+             // Or just the reduction: "Size reduced by 85%"
+             processingInfo.textContent = `${originalFormatted} -> ${convertedFormatted} (${reductionPercent}% smaller)`;
+        }
+    }
 
     // --- Shortcut/Trigger Handlers ---
     function handleTriggerStart() {

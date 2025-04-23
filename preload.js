@@ -58,6 +58,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('trigger-start-recording', handler);
     },
 
+    /**
+     * Listens for progress updates from the ffmpeg process in main.
+     * @param {function} callback - Function to call with data { originalSize, convertedSize }.
+     * @returns {function} A function to remove the listener.
+     */
+    onFfmpegProgress: (callback) => {
+        const handler = (_event, data) => {
+            console.log("Preload: Received ffmpeg-progress event.", data);
+            callback(data);
+        };
+        ipcRenderer.on('ffmpeg-progress', handler);
+        return () => ipcRenderer.removeListener('ffmpeg-progress', handler);
+    },
      /**
       * Listens for a trigger from the main process to stop recording.
       * @param {function} callback - The function to call with the save flag (boolean).

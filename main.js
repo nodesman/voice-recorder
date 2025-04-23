@@ -364,6 +364,16 @@ if (!gotTheLock) {
         }
     }
 
+    /** Helper to format bytes */
+    function formatBytes(bytes, decimals = 1) {
+        if (!bytes || bytes === 0) return '0 Bytes'; // Handle null/undefined/zero
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
     // --- IPC Handlers ---
 
     ipcMain.on('hide-window', () => {
@@ -383,8 +393,14 @@ if (!gotTheLock) {
         }
         // --- End Cleanup ---
 
-        if (!openai) { /* ... (existing error handling) ... */ return operationResult; }
-        if (!audioDataUint8Array || audioDataUint8Array.length === 0) { /* ... */ return operationResult; }
+        if (!openai) {
+            operationResult.error = "OpenAI API key is not configured.";
+            return operationResult;
+         }
+        if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
+            operationResult.error = "No audio data received.";
+            return operationResult;
+        }
 
         const timestamp = Date.now();
         const tempFileNameWebm = `rec-input-${timestamp}.webm`;
@@ -393,14 +409,17 @@ if (!gotTheLock) {
         const tempFilePathMp3 = path.join(os.tmpdir(), tempFileNameMp3);
         let webmFileWritten = false;
         let mp3FileCreated = false;
+        let originalSizeBytes = 0; // Initialize here
 
         try {
             // 1. Save original buffer
             const nodeBuffer = Buffer.from(audioDataUint8Array);
+            originalSizeBytes = nodeBuffer.length; // Get size before writing
             if (nodeBuffer.length === 0) throw new Error("Received audio data resulted in an empty Buffer.");
             await fs.promises.writeFile(tempFilePathWebm, nodeBuffer);
             webmFileWritten = true;
             console.log(`Main: Original audio saved to ${tempFilePathWebm}`);
+
 
             // 2. Convert .webm to .mp3 with silence removal
             const silenceFilter = "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-35dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-35dB:detection=peak";
@@ -409,14 +428,49 @@ if (!gotTheLock) {
             try {
                 await execPromise(ffmpegCommand);
                 const mp3Stats = await fs.promises.stat(tempFilePathMp3);
+                const convertedSizeBytes = mp3Stats.size;
                 if (mp3Stats.size === 0) {
                     console.log("Main: ffmpeg resulted in empty MP3 (silence). Skipping transcription.");
                     operationResult = { success: true, error: "Recording contained only silence.", retryable: false };
+
+                    // Send progress update even for silence
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                         console.log("Main: Sending ffmpeg progress update (silence detected).");
+                         mainWindow.webContents.send('ffmpeg-progress', {
+                             originalSize: originalSizeBytes,
+                             convertedSize: 0,
+                             originalFormatted: formatBytes(originalSizeBytes),
+                             convertedFormatted: formatBytes(0),
+                             reductionPercent: originalSizeBytes > 0 ? 100 : 0 // 100% reduction if original had size
+                         });
+                     } else {
+                         console.warn("Main: Cannot send ffmpeg progress, mainWindow is gone.");
+                     }
+
                     // Let finally block handle cleanup and hide
                     return operationResult;
                 }
                 mp3FileCreated = true;
                 console.log(`Main: Converted audio saved to ${tempFilePathMp3}`);
+
+                // --- Send progress update to renderer ---
+                 if (mainWindow && !mainWindow.isDestroyed()) {
+                     const reductionPercent = originalSizeBytes > 0
+                        ? Math.round(((originalSizeBytes - convertedSizeBytes) / originalSizeBytes) * 100)
+                        : 0;
+                     console.log("Main: Sending ffmpeg progress update.");
+                     mainWindow.webContents.send('ffmpeg-progress', {
+                         originalSize: originalSizeBytes,
+                         convertedSize: convertedSizeBytes,
+                         originalFormatted: formatBytes(originalSizeBytes),
+                         convertedFormatted: formatBytes(convertedSizeBytes),
+                         reductionPercent: Math.max(0, reductionPercent) // Ensure non-negative
+                     });
+                 } else {
+                     console.warn("Main: Cannot send ffmpeg progress, mainWindow is gone.");
+                 }
+                 // --- End progress update ---
+
             } catch (ffmpegError) {
                 console.error('Main: ffmpeg processing failed:', ffmpegError);
                 let errorDetail = ffmpegError.message || 'Unknown ffmpeg error';
