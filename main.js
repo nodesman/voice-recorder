@@ -1,3 +1,4 @@
+```javascript
 // main.js
 const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard, screen } = require('electron');
 const path = require('path');
@@ -12,7 +13,7 @@ const OpenAI = require('openai'); // Ensure OpenAI is required
 // --- Single Instance Lock ---
 const gotTheLock = app.requestSingleInstanceLock();
 
-// --- ADDED: Variable to store path for retry ---
+// --- Variable to store path for retry ---
 let lastFailedMp3Path = null; // Stores the path to the MP3 if transcription fails retryably
 
 if (!gotTheLock) {
@@ -94,21 +95,20 @@ if (!gotTheLock) {
                 } catch (xdoCheckError) {
                     console.error("Main: xdotool command not found. Cannot paste automatically.");
                     console.error("Main: Please install xdotool (e.g., 'sudo apt install xdotool' or 'sudo yum install xdotool').");
+                    throw new Error("xdotool not found. Automatic paste failed."); // Re-throw to indicate failure
                 }
                 console.warn("Main: Automatic pasting on Linux relies on xdotool and may not work reliably on Wayland display servers.");
             } else {
                 console.warn(`Main: Automatic pasting not implemented for platform: ${platform}`);
+                throw new Error(`Automatic paste not supported on ${platform}.`); // Throw to indicate failure
             }
         } catch (error) {
             console.error(`Main: Failed to execute paste command for platform ${platform}.`);
             console.error("Main: Command:", command);
             console.error("Main: Error:", error.message);
             if (error.stderr) console.error("Main: Stderr:", error.stderr);
-
-            // If paste failed, but window was hidden for it, potentially show it again?
-            // Or rely on the error dialog / retry state to keep it visible?
-            // Let's keep it hidden for now to avoid potential focus issues.
-            // If retry is needed, the window will remain visible anyway.
+            // Re-throw the error so the caller knows pasting failed
+            throw error;
         }
     }
     // --- END Platform-Specific Paste Logic ---
@@ -119,6 +119,7 @@ if (!gotTheLock) {
     function createWindow() {
         // ... (existing createWindow code remains unchanged) ...
          if (!process.env.OPENAI_API_KEY) {
+            // Show error early if key is missing during initial setup
             dialog.showErrorBox("Configuration Error", "OpenAI API Key is missing. Please set OPENAI_API_KEY in the .env file. The application will exit.");
             app.quit();
             return; // Stop window creation
@@ -127,11 +128,15 @@ if (!gotTheLock) {
         const primaryDisplay = screen.getPrimaryDisplay();
         const { width, height } = primaryDisplay.workAreaSize;
 
-        const targetX = Math.round(width * 3 / 4);
-        const targetY = Math.round(height * 1 / 8);
-
+        // Position near top-right, adjust as needed
         const windowWidth = 380;
-        const windowHeight = 65;
+        const windowHeight = 75; // Slightly increased height for potential retry button
+        const marginX = 20;
+        const marginY = 50;
+
+        const targetX = width - windowWidth - marginX;
+        const targetY = marginY;
+
 
         mainWindow = new BrowserWindow({
             width: windowWidth,
@@ -141,35 +146,48 @@ if (!gotTheLock) {
             frame: false,
             resizable: false,
             alwaysOnTop: true,
-            show: false,
-            skipTaskbar: true,
-            transparent: true,
-            acceptFirstMouse: true,
-            focusable: false, // Keep non-focusable
+            show: false, // Initially hidden
+            skipTaskbar: true, // Don't show in taskbar
+            transparent: true, // Enable transparency
+            acceptFirstMouse: true, // Allow click-through for first click
+            focusable: false, // Prevent stealing focus
             webPreferences: {
                 preload: path.join(__dirname, 'preload.js'),
                 contextIsolation: true,
                 nodeIntegration: false,
-                devTools: !app.isPackaged,
+                devTools: !app.isPackaged, // Enable DevTools in development
             }
         });
 
         mainWindow.loadFile('index.html');
 
+        // Optional: Open DevTools automatically if not packaged
+        // if (!app.isPackaged) {
+        //     mainWindow.webContents.openDevTools({ mode: 'detach' });
+        // }
+
         mainWindow.on('closed', () => {
             mainWindow = null;
+        });
+
+        // Handle focus loss - hide the window unless we are in a retry state
+        mainWindow.on('blur', () => {
+            console.log("Main: Window blurred.");
+            hideMainWindow(); // Use the helper which respects retry state
         });
     }
 
     // --- App Lifecycle ---
     app.whenReady().then(() => {
         if (!openai) {
-            console.error("Exiting due to missing OpenAI key (already checked in createWindow, but belt-and-suspenders).");
+            // Should have been caught by createWindow, but double-check
+            console.error("Exiting due to missing OpenAI key.");
+            app.quit(); // Ensure exit if somehow reached here without key
             return;
         }
 
         if (process.platform === 'darwin') {
-            app.dock.hide();
+            app.dock.hide(); // Hide dock icon on macOS
         }
 
         createWindow();
@@ -186,32 +204,39 @@ if (!gotTheLock) {
 
             try {
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                     // NEW: Check if we are in an error/retry state
+                     // Check if we are in an error/retry state
                      if (lastFailedMp3Path) {
                          console.log("Main: Shortcut pressed while in error state. Triggering cancel.");
-                         cancelPendingRetry(); // Call the cancel function (defined later)
-                         // No need to send anything to renderer, cancel handles hiding
+                         cancelPendingRetry(); // Cancel the pending retry and hide
                      } else if (mainWindow.isVisible()) {
-                         // Window is visible: could be recording or idle. Send stop signal.
-                         // Renderer handles the current state (stop recording or ignore if idle).
+                         // Window is visible: could be recording or idle/success/error. Send stop signal.
+                         // Renderer handles the current state (stop recording, discard success, or handle idle).
                          console.log("Main: Window visible, sending trigger-stop-recording (true).");
-                         mainWindow.webContents.send('trigger-stop-recording', true);
+                         mainWindow.webContents.send('trigger-stop-recording', true); // true indicates shortcut triggered stop
                      } else {
                         // Window not visible: show and trigger start
                         console.log("Main: Window not visible, showing inactive and triggering record.");
-                        mainWindow.showInactive();
-                        setTimeout(() => {
-                           if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-                              console.log("Main: Sending trigger-start-recording to renderer.");
-                              mainWindow.webContents.send('trigger-start-recording');
-                           }
-                        }, 100); // Keep delay
+                        // Ensure window is created if somehow destroyed
+                        if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.showInactive(); // Show without stealing focus
+                            // Use setTimeout to ensure the window is shown before sending the message
+                            setTimeout(() => {
+                               if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+                                  console.log("Main: Sending trigger-start-recording to renderer.");
+                                  mainWindow.webContents.send('trigger-start-recording');
+                               } else {
+                                   console.log("Main: Window was not visible after showInactive; cannot start recording.");
+                               }
+                            }, 50); // Reduced delay slightly
+                        }
                      }
                 } else {
                     // Window doesn't exist: create and start
                     console.log("Main: Shortcut triggered but mainWindow is null/destroyed. Recreating.");
                     createWindow();
                     if (mainWindow) {
+                        // Wait for window to be ready before showing and triggering
                         mainWindow.once('ready-to-show', () => {
                             mainWindow.showInactive();
                             setTimeout(() => {
@@ -219,15 +244,16 @@ if (!gotTheLock) {
                                     console.log("Main: Sending trigger-start-recording after recreation.");
                                     mainWindow.webContents.send('trigger-start-recording');
                                 }
-                            }, 100);
+                            }, 50);
                         });
+                    } else {
+                         console.error("Main: Failed to recreate window on shortcut trigger.");
                     }
                 }
             } catch (error) {
                  console.error("Main: Error during shortcut handling:", error);
              } finally {
                  // Release lock AFTER any potential async operations inside might have started
-                 // Using setTimeout to ensure it releases after the current execution path completes
                  setTimeout(() => {
                     isProcessingShortcut = false;
                     console.log('Main: Released shortcut lock.');
@@ -237,15 +263,32 @@ if (!gotTheLock) {
 
         if (!ret) {
             console.error('Main: globalShortcut registration failed');
-            dialog.showErrorBox("Error", "Failed to register global shortcut (CmdOrCtrl+Shift+R). Is another application using it?");
+            dialog.showErrorBox("Error", "Failed to register global shortcut (CmdOrCtrl+Shift+R). Is another application using it? Please check system settings or conflicting apps.");
+            // Optionally quit if the shortcut is essential
+            // app.quit();
         } else {
             console.log('Main: globalShortcut CmdOrCtrl+Shift+R registered successfully.');
         }
     });
 
     app.on('window-all-closed', function () {
-        app.quit();
+        // On macOS it's common to stay active until Cmd+Q
+        if (process.platform !== 'darwin') {
+            app.quit();
+        }
     });
+
+    app.on('activate', function () {
+        // On macOS re-create window if dock icon is clicked and no windows open
+        if (BrowserWindow.getAllWindows().length === 0) {
+            createWindow();
+        }
+         // Optional: Show the main window if it exists but is hidden
+         if (mainWindow && !mainWindow.isVisible()) {
+             // mainWindow.show(); // Or showInactive() if preferred
+         }
+    });
+
 
     app.on('will-quit', () => {
         globalShortcut.unregisterAll();
@@ -265,7 +308,14 @@ if (!gotTheLock) {
         if (filePath) {
             fs.promises.unlink(filePath)
                 .then(() => console.log(`Main: Deleted temp file (${context}): ${filePath}`))
-                .catch(err => console.error(`Main: Failed to delete temp file (${context}) ${filePath}:`, err));
+                .catch(err => {
+                    // Log ENOENT (File Not Found) less severely as it might have been cleaned already
+                    if (err.code === 'ENOENT') {
+                         console.warn(`Main: Temp file already deleted? (${context}) ${filePath}:`, err.message);
+                    } else {
+                         console.error(`Main: Failed to delete temp file (${context}) ${filePath}:`, err);
+                    }
+                });
         }
     }
 
@@ -278,40 +328,50 @@ if (!gotTheLock) {
             } else {
                 console.log("Main: Keeping window visible due to pending retry.");
             }
+        } else {
+             console.log("Main: Window already hidden or destroyed, no action needed for hideMainWindow.");
         }
     }
 
     /** Determines if an error is likely temporary and worth retrying */
     function isRetryableError(error) {
         if (error instanceof OpenAI.APIError) {
+            // 408 Request Timeout, 429 Rate Limit, 5xx Server Errors
             const retryableStatuses = [408, 429, 500, 502, 503, 504];
             if (retryableStatuses.includes(error.status)) {
                 console.log(`Main: Retryable OpenAI error status: ${error.status}`);
                 return true;
             }
-            // Check for specific error codes/types if needed
-            // e.g., if (error.code === 'rate_limit_exceeded') return true;
+            // Potentially check for specific error codes/types for overload etc.
+            // if (error.code === 'server_busy' || error.type === 'server_error') return true;
         }
-        // Add checks for generic network errors (e.g., from execPromise or fs) if applicable
-        // For now, focusing on OpenAI API errors.
-        console.log("Main: Non-retryable error encountered:", error.message);
+        // Add checks for generic network errors here if needed (e.g., ECONNRESET, ETIMEDOUT)
+        // if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code)) {
+        //     console.log(`Main: Retryable network error: ${error.code}`);
+        //     return true;
+        // }
+        console.log("Main: Non-retryable error encountered:", error?.message || error);
         return false;
     }
 
     /** Core transcription and pasting logic */
     async function _performTranscriptionAndPasting(mp3FilePath) {
-        let operationStatus = { success: false, error: null, retryable: false };
+        let operationStatus = { success: false, error: null, retryable: false, transcriptionText: null };
 
         if (!mp3FilePath) {
             operationStatus.error = "Internal error: No MP3 file path provided for transcription.";
             return operationStatus;
         }
+        if (!openai) {
+            operationStatus.error = "OpenAI client not initialized (missing API key?).";
+             return operationStatus;
+        }
 
         try {
-            // Check if file exists before sending
+            // Check if file exists and is readable
             await fs.promises.access(mp3FilePath, fs.constants.R_OK);
-
             console.log(`Main: Sending MP3 to OpenAI: ${mp3FilePath}`);
+
             const transcription = await openai.audio.transcriptions.create({
                 file: fs.createReadStream(mp3FilePath),
                 model: 'whisper-1',
@@ -319,6 +379,7 @@ if (!gotTheLock) {
 
             const transcribedText = transcription.text?.trim();
             console.log('Main: Transcription successful:', transcribedText || "[Empty result]");
+            operationStatus.transcriptionText = transcribedText; // Store text even if empty
 
             if (transcribedText && transcribedText.length > 0) {
                 try {
@@ -332,31 +393,35 @@ if (!gotTheLock) {
                     operationStatus.success = true;
                 } catch (copyOrPasteError) {
                     console.error("Main: Clipboard write or paste failed:", copyOrPasteError);
-                    // This is generally not retryable from OpenAI's perspective
-                    operationStatus.error = `Transcription succeeded but copy/paste failed: ${copyOrPasteError.message}. Text is on clipboard.`;
-                    operationStatus.success = false; // Mark as failed overall
+                    // Mark as success=false but provide context. Not retryable from OpenAI's perspective.
+                    operationStatus.error = `Paste failed: ${copyOrPasteError.message}. Text copied.`;
+                    operationStatus.success = false; // Overall operation failed due to paste issue
                     operationStatus.retryable = false;
-                    // No dialog here, let caller handle UI
                 }
             } else {
-                console.log("Main: Transcription result was empty, nothing to copy or paste.");
-                operationStatus.success = true; // Processing technically succeeded
+                console.log("Main: Transcription result was empty. Nothing to copy or paste.");
+                operationStatus.success = true; // Technically successful transcription, just empty.
+                operationStatus.error = "Transcription returned empty result."; // Provide context
             }
             return operationStatus;
 
         } catch (error) {
             console.error('Main: Error during transcription/copying process:', error);
             let errorMessage = 'An unexpected error occurred during processing.';
+             operationStatus.retryable = isRetryableError(error); // Check if retryable first
+
             if (error instanceof OpenAI.APIError) {
                 errorMessage = `OpenAI Error (${error.status}): ${error.message || 'Failed to transcribe.'}`;
-                operationStatus.retryable = isRetryableError(error);
             } else if (error.code === 'ENOENT') {
                  errorMessage = `Internal error: MP3 file not found at ${mp3FilePath}.`;
                  operationStatus.retryable = false; // Cannot retry if file is gone
-            } else if (error instanceof Error) {
+            } else if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code)) {
+                 errorMessage = `Network Error: ${error.message}`;
+                 // Network errors are often retryable
+                 operationStatus.retryable = true;
+             } else if (error instanceof Error) {
                 errorMessage = error.message;
-                // Assume other errors (like fs access denied, unexpected exec errors) are not retryable
-                operationStatus.retryable = false;
+                // Assume other errors are not retryable unless specifically handled
             }
             operationStatus.error = errorMessage;
             operationStatus.success = false;
@@ -370,20 +435,27 @@ if (!gotTheLock) {
         const k = 1024;
         const dm = decimals < 0 ? 0 : decimals;
         const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        try { // Add try-catch for potential Math.log(0) or negative bytes
+             const i = Math.floor(Math.log(bytes) / Math.log(k));
+             // Ensure index i is within bounds
+             const safeIndex = Math.max(0, Math.min(i, sizes.length - 1));
+             return parseFloat((bytes / Math.pow(k, safeIndex)).toFixed(dm)) + ' ' + sizes[safeIndex];
+        } catch (e) {
+             console.warn(`Error formatting bytes: ${bytes}`, e);
+             return `${bytes} Bytes`; // Fallback
+        }
     }
 
     // --- IPC Handlers ---
 
     ipcMain.on('hide-window', () => {
         console.log("Main: Received hide-window request from renderer.");
-        hideMainWindow(); // Use the helper function
+        hideMainWindow(); // Use the helper function which respects retry state
     });
 
     ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         console.log('Main: Initiating new transcription process.');
-        let operationResult = { success: false, error: null, retryable: false }; // Default result
+        let operationResult = { success: false, error: null, retryable: false, transcriptionText: null }; // Default result
 
         // --- Cleanup previous state ---
         if (lastFailedMp3Path) {
@@ -395,10 +467,12 @@ if (!gotTheLock) {
 
         if (!openai) {
             operationResult.error = "OpenAI API key is not configured.";
+            console.error("Main:", operationResult.error);
             return operationResult;
          }
         if (!audioDataUint8Array || audioDataUint8Array.length === 0) {
             operationResult.error = "No audio data received.";
+             console.error("Main:", operationResult.error);
             return operationResult;
         }
 
@@ -418,20 +492,22 @@ if (!gotTheLock) {
             if (nodeBuffer.length === 0) throw new Error("Received audio data resulted in an empty Buffer.");
             await fs.promises.writeFile(tempFilePathWebm, nodeBuffer);
             webmFileWritten = true;
-            console.log(`Main: Original audio saved to ${tempFilePathWebm}`);
+            console.log(`Main: Original audio (${formatBytes(originalSizeBytes)}) saved to ${tempFilePathWebm}`);
 
 
             // 2. Convert .webm to .mp3 with silence removal
-            const silenceFilter = "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-35dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-35dB:detection=peak";
-            const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -af "${silenceFilter}" -acodec libmp3lame -ab 48k -ar 16000 -ac 1 -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
+            // Increased duration slightly, reduced threshold for more aggressive removal
+            const silenceFilter = "silenceremove=start_periods=1:start_duration=0.3:start_threshold=-40dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-40dB:detection=peak";
+            // Using a slightly higher bitrate, standard sample rate, mono
+            const ffmpegCommand = `ffmpeg -i "${tempFilePathWebm}" -vn -af "${silenceFilter}" -acodec libmp3lame -ab 64k -ar 44100 -ac 1 -y -hide_banner -loglevel error "${tempFilePathMp3}"`;
             console.log('Main: Executing ffmpeg:', ffmpegCommand);
             try {
                 await execPromise(ffmpegCommand);
                 const mp3Stats = await fs.promises.stat(tempFilePathMp3);
                 const convertedSizeBytes = mp3Stats.size;
                 if (mp3Stats.size === 0) {
-                    console.log("Main: ffmpeg resulted in empty MP3 (silence). Skipping transcription.");
-                    operationResult = { success: true, error: "Recording contained only silence.", retryable: false };
+                    console.log("Main: ffmpeg resulted in empty MP3 (likely silence or too short). Skipping transcription.");
+                    operationResult = { success: true, error: "Recording contained only silence.", retryable: false, transcriptionText: "" };
 
                     // Send progress update even for silence
                     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -447,11 +523,11 @@ if (!gotTheLock) {
                          console.warn("Main: Cannot send ffmpeg progress, mainWindow is gone.");
                      }
 
-                    // Let finally block handle cleanup and hide
+                    // Return early, finally block will handle cleanup and hide
                     return operationResult;
                 }
                 mp3FileCreated = true;
-                console.log(`Main: Converted audio saved to ${tempFilePathMp3}`);
+                console.log(`Main: Converted audio (${formatBytes(convertedSizeBytes)}) saved to ${tempFilePathMp3}`);
 
                 // --- Send progress update to renderer ---
                  if (mainWindow && !mainWindow.isDestroyed()) {
@@ -478,6 +554,10 @@ if (!gotTheLock) {
                  if (errorDetail.toLowerCase().includes('command not found') || errorDetail.includes('enoent')) {
                      throw new Error('ffmpeg command not found. Ensure ffmpeg is installed and in your system PATH.');
                  }
+                // Check if error indicates input file issue (e.g., corrupted)
+                 if (errorDetail.includes('Invalid data found when processing input')) {
+                     throw new Error(`ffmpeg failed: Input audio data seems invalid or corrupted.`);
+                 }
                 throw new Error(`ffmpeg processing failed: ${errorDetail}`);
             }
 
@@ -488,111 +568,4 @@ if (!gotTheLock) {
 
         } catch (error) { // Catches errors from saving, ffmpeg setup, etc. (before _performTranscriptionAndPasting)
             console.error('Main: Error during pre-transcription process:', error);
-            operationResult = { success: false, error: error.message || "Failed during audio preparation.", retryable: false };
-            // Don't show dialog here for setup errors, return the status
-            return operationResult;
-        } finally {
-             console.log("Main: 'transcribe-audio' handler final block executing. Result:", operationResult);
-            // Cleanup based on the final operation result
-            if (operationResult.retryable) {
-                console.log("Main: Transcription failed retryably. Storing MP3 path:", tempFilePathMp3);
-                lastFailedMp3Path = tempFilePathMp3; // Keep MP3
-                if (webmFileWritten) cleanupTempFile(tempFilePathWebm, "retryable error cleanup"); // Delete WebM
-                // DO NOT hide window
-            } else {
-                 // Success OR non-retryable failure
-                 if (webmFileWritten) cleanupTempFile(tempFilePathWebm, "final cleanup (success or non-retryable)");
-                 if (mp3FileCreated) cleanupTempFile(tempFilePathMp3, "final cleanup (success or non-retryable)");
-
-                 // Show error dialog ONLY for non-retryable errors that weren't silence related
-                 if (!operationResult.success && !operationResult.retryable && operationResult.error && !operationResult.error.includes("silence")) {
-                     // Exclude copy/paste errors as they are less critical and text might be on clipboard
-                     if (!operationResult.error.includes("copy/paste failed")) {
-                        dialog.showErrorBox("Processing Failed", operationResult.error);
-                     } else {
-                         // Optionally show a less intrusive notification for copy/paste failures
-                         console.warn("Main: Copy/paste failed after transcription. Text is on clipboard.");
-                     }
-                 }
-
-                 // Hide window on success or non-retryable error
-                 hideMainWindow();
-            }
-            console.log("Main: 'transcribe-audio' handler finished.");
-        }
-    });
-
-    ipcMain.handle('retry-transcription', async () => {
-        console.log("Main: Received retry-transcription request.");
-        let operationResult = { success: false, error: null, retryable: false };
-
-        if (!lastFailedMp3Path) {
-            console.error("Main: Retry requested but no failed MP3 path is stored.");
-            return { success: false, error: "No previous failed attempt found to retry.", retryable: false };
-        }
-
-        const pathToRetry = lastFailedMp3Path; // Store the path locally
-        lastFailedMp3Path = null; // Clear the global path BEFORE attempting retry
-
-        console.log("Main: Attempting retry with file:", pathToRetry);
-        try {
-            operationResult = await _performTranscriptionAndPasting(pathToRetry);
-
-            // Process result
-            if (operationResult.success) {
-                console.log("Main: Retry successful.");
-                cleanupTempFile(pathToRetry, "successful retry cleanup"); // Delete file on success
-                hideMainWindow();
-            } else if (operationResult.retryable) {
-                console.log("Main: Retry failed retryably. Re-storing MP3 path:", pathToRetry);
-                lastFailedMp3Path = pathToRetry; // Restore the path for another retry
-                // DO NOT hide window, DO NOT delete file
-            } else {
-                // Non-retryable failure on retry
-                console.error("Main: Retry failed non-retryably:", operationResult.error);
-                 // Show error dialog for non-retryable errors during retry
-                 if (operationResult.error && !operationResult.error.includes("copy/paste failed")) {
-                    dialog.showErrorBox("Retry Failed", operationResult.error);
-                 } else if (operationResult.error) {
-                     console.warn("Main: Copy/paste failed during retry. Text is on clipboard.");
-                 }
-                cleanupTempFile(pathToRetry, "non-retryable retry failure cleanup"); // Delete file
-                hideMainWindow();
-            }
-            return operationResult; // Return the result from the helper
-
-        } catch (error) { // Catch unexpected errors during the retry handler itself
-             console.error('Main: Unexpected error during retry handler:', error);
-             operationResult = { success: false, error: `Unexpected retry error: ${error.message}`, retryable: false };
-             cleanupTempFile(pathToRetry, "unexpected retry error cleanup"); // Clean up file
-             lastFailedMp3Path = null; // Ensure path is cleared
-             hideMainWindow();
-             return operationResult;
-        } finally {
-             console.log("Main: 'retry-transcription' handler finished.");
-        }
-
-    });
-
-    // --- NEW: Cancel Retry Handler ---
-    function cancelPendingRetry() {
-         console.log("Main: Cancelling pending retry action.");
-         if (lastFailedMp3Path) {
-             const pathToCancel = lastFailedMp3Path;
-             lastFailedMp3Path = null; // Clear immediately
-             cleanupTempFile(pathToCancel, "cancel retry");
-             hideMainWindow(); // Hide after cancelling
-         } else {
-             console.log("Main: No pending retry to cancel.");
-             // If cancel is triggered (e.g., by shortcut) when not in retry state, just ensure window is hidden
-             hideMainWindow();
-         }
-     }
-
-    ipcMain.on('cancel-retry', () => {
-        console.log("Main: Received cancel-retry request from renderer.");
-        cancelPendingRetry();
-    });
-    // --- END IPC Handlers ---
-
-} // --- End of the 'else' block for the primary instance ---
+            operationResult = { success: false, error
