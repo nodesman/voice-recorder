@@ -1,4 +1,3 @@
-```javascript
 // main.js
 const { app, BrowserWindow, ipcMain, globalShortcut, dialog, clipboard, screen } = require('electron');
 const path = require('path');
@@ -333,6 +332,23 @@ if (!gotTheLock) {
         }
     }
 
+    /** Cancels any pending retry operation */
+    function cancelPendingRetry() {
+         if (lastFailedMp3Path) {
+             console.log("Main: Cancelling pending retry and cleaning up file:", lastFailedMp3Path);
+             cleanupTempFile(lastFailedMp3Path, "retry cancelled");
+             lastFailedMp3Path = null;
+             // Optionally, notify renderer to reset UI from error state
+             if (mainWindow && !mainWindow.isDestroyed()) {
+                 mainWindow.webContents.send('cancel-retry-ui');
+             }
+             hideMainWindow(); // Hide after cancelling
+         } else {
+            console.log("Main: No pending retry to cancel.");
+             hideMainWindow(); // Still hide if cancel was triggered inadvertently
+         }
+     }
+
     /** Determines if an error is likely temporary and worth retrying */
     function isRetryableError(error) {
         if (error instanceof OpenAI.APIError) {
@@ -346,10 +362,10 @@ if (!gotTheLock) {
             // if (error.code === 'server_busy' || error.type === 'server_error') return true;
         }
         // Add checks for generic network errors here if needed (e.g., ECONNRESET, ETIMEDOUT)
-        // if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code)) {
-        //     console.log(`Main: Retryable network error: ${error.code}`);
-        //     return true;
-        // }
+         if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code)) {
+             console.log(`Main: Retryable network error: ${error.code}`);
+             return true;
+         }
         console.log("Main: Non-retryable error encountered:", error?.message || error);
         return false;
     }
@@ -418,7 +434,7 @@ if (!gotTheLock) {
             } else if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code)) {
                  errorMessage = `Network Error: ${error.message}`;
                  // Network errors are often retryable
-                 operationStatus.retryable = true;
+                 // We already checked isRetryableError, but this adds context.
              } else if (error instanceof Error) {
                 errorMessage = error.message;
                 // Assume other errors are not retryable unless specifically handled
@@ -452,6 +468,46 @@ if (!gotTheLock) {
         console.log("Main: Received hide-window request from renderer.");
         hideMainWindow(); // Use the helper function which respects retry state
     });
+
+    ipcMain.on('cancel-retry', () => {
+        console.log("Main: Received cancel-retry request from renderer.");
+        cancelPendingRetry();
+    });
+
+    ipcMain.handle('retry-transcription', async () => {
+        console.log("Main: Received retry-transcription request.");
+        if (lastFailedMp3Path) {
+            console.log("Main: Retrying transcription for file:", lastFailedMp3Path);
+            const mp3ToRetry = lastFailedMp3Path;
+            lastFailedMp3Path = null; // Clear the path *before* attempting retry
+
+            let retryResult = await _performTranscriptionAndPasting(mp3ToRetry);
+
+            // Final cleanup and hiding logic based on retry result
+            if (retryResult.success) {
+                console.log("Main: Retry successful.");
+                cleanupTempFile(mp3ToRetry, "successful retry");
+                // Paste function might have hidden window, but ensure it if not.
+                hideMainWindow();
+            } else {
+                console.error("Main: Retry failed again.");
+                if (retryResult.retryable) {
+                    console.log("Main: Retry failed, but error is retryable. Storing path again.");
+                    lastFailedMp3Path = mp3ToRetry; // Store path again for another potential retry
+                    // Don't hide window, let renderer show error/retry again
+                } else {
+                    console.log("Main: Retry failed with non-retryable error. Cleaning up.");
+                    cleanupTempFile(mp3ToRetry, "failed non-retryable retry");
+                     hideMainWindow(); // Hide after final failure
+                }
+            }
+            return retryResult; // Return the outcome of the retry attempt
+        } else {
+            console.warn("Main: Retry requested, but no failed MP3 path stored.");
+            return { success: false, error: "No pending transcription found to retry.", retryable: false };
+        }
+    });
+
 
     ipcMain.handle('transcribe-audio', async (event, audioDataUint8Array) => {
         console.log('Main: Initiating new transcription process.');
@@ -568,4 +624,51 @@ if (!gotTheLock) {
 
         } catch (error) { // Catches errors from saving, ffmpeg setup, etc. (before _performTranscriptionAndPasting)
             console.error('Main: Error during pre-transcription process:', error);
-            operationResult = { success: false, error
+             operationResult = { success: false, error: error.message || "An unknown pre-transcription error occurred.", retryable: false, transcriptionText: null };
+            // Determine if it's a setup issue (like ffmpeg missing) vs. a file issue
+             if (error.message.includes('ffmpeg command not found')) {
+                 // This isn't retryable in the same way an API call is
+                 operationResult.error = "ffmpeg not found. Please install ffmpeg.";
+                 // Optionally show a dialog?
+                 if (!app.isPackaged) { // Only show detailed error in dev
+                     dialog.showErrorBox("ffmpeg Error", "ffmpeg command not found. Please install ffmpeg and ensure it's in your system's PATH.");
+                 }
+             }
+             // Other errors are just returned with their message
+            return operationResult;
+
+        } finally {
+             console.log("Main: Transcription handler finally block executing.");
+             // Clean up webm file regardless of success/failure
+            if (webmFileWritten) {
+                cleanupTempFile(tempFilePathWebm, "handler finally");
+            }
+
+            // Handle MP3 based on outcome
+            if (mp3FileCreated) {
+                if (operationResult.success) {
+                    console.log("Main: Operation successful, cleaning up MP3.");
+                    cleanupTempFile(tempFilePathMp3, "handler finally success");
+                     hideMainWindow(); // Hide on success
+                } else if (operationResult.retryable) {
+                    console.warn(`Main: Operation failed retryably (${operationResult.error}). Storing MP3 path: ${tempFilePathMp3}`);
+                    lastFailedMp3Path = tempFilePathMp3; // Store for potential retry
+                    // Keep window visible for retry prompt
+                } else {
+                    console.error(`Main: Operation failed non-retryably (${operationResult.error}). Cleaning up MP3.`);
+                    cleanupTempFile(tempFilePathMp3, "handler finally non-retryable failure");
+                    // Keep window visible to show the final error state before hiding on interaction
+                    // hideMainWindow(); // Consider hiding even on non-retryable failure after a delay?
+                }
+            } else {
+                 // If MP3 wasn't created (e.g., ffmpeg error before creation, or silent recording)
+                 console.log("Main: MP3 file was not created or processed, no MP3 cleanup needed from finally block.");
+                 // Hide window unless it was a retryable error (which shouldn't happen if mp3 wasn't created)
+                 if (!operationResult.retryable) {
+                     hideMainWindow();
+                 }
+             }
+        }
+    });
+
+} // End of 'else' block for single instance lock
