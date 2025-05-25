@@ -1,4 +1,3 @@
-```javascript
 // renderer.js
 "use strict";
 
@@ -75,7 +74,7 @@ const AudioRecorder = (() => {
 
         if (!recorderContainer || !micButton || !cancelRecordingButton || !confirmButton || !recordingCanvas || !timerDisplay || !cancelErrorButton || !retryButton || !errorMessage || !processingInfo) {
             console.error("Recorder UI elements not found! Check IDs in index.html.");
-             if(errorMessage) errorMessage.textContent = "Error: UI elements missing.";
+            if (errorMessage) errorMessage.textContent = "Error: UI elements missing.";
             return;
         }
 
@@ -100,10 +99,10 @@ const AudioRecorder = (() => {
             console.log("Audio Recorder Initialized and listeners added.");
         } else {
             console.error("Initialization skipped: Essential electronAPI functions not available.");
-             recorderContainer.style.opacity = '0.5';
-             recorderContainer.title = 'Recorder disabled due to internal error.';
-             if (micButton) micButton.disabled = true; // Ensure disabled if API check failed here
-             if (errorMessage) errorMessage.textContent = "Error: API unavailable.";
+            recorderContainer.style.opacity = '0.5';
+            recorderContainer.title = 'Recorder disabled due to internal error.';
+            if (micButton) micButton.disabled = true; // Ensure disabled if API check failed here
+            if (errorMessage) errorMessage.textContent = "Error: API unavailable.";
         }
 
         // Set initial state based on HTML attribute
@@ -143,7 +142,7 @@ const AudioRecorder = (() => {
         lastAudioBuffer = null; // Clear any previous buffer
 
         try {
-            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStream = await navigator.mediaDevices.getUserMedia({audio: true});
             console.log("Microphone access granted.");
 
             waveformHistory.fill(0);
@@ -166,7 +165,7 @@ const AudioRecorder = (() => {
                 }
             }
             console.log("Using MIME type:", currentMimeType || "Browser default");
-            const options = currentMimeType ? { mimeType: currentMimeType } : {};
+            const options = currentMimeType ? {mimeType: currentMimeType} : {};
             mediaRecorder = new MediaRecorder(mediaStream, options);
 
             mediaRecorder.ondataavailable = handleDataAvailable;
@@ -190,18 +189,18 @@ const AudioRecorder = (() => {
         } catch (err) {
             console.error("Error starting recording:", err);
             let userMessage = `Could not start recording: ${err.message}`;
-             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-                 userMessage = "Microphone access was denied. Please allow access and try again.";
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                userMessage = "Microphone access was denied. Please allow access and try again.";
             } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-                 userMessage = "No microphone found. Please ensure one is connected and enabled.";
+                userMessage = "No microphone found. Please ensure one is connected and enabled.";
             }
             // Display error in the dedicated element
-             if (errorMessage) {
+            if (errorMessage) {
                 errorMessage.textContent = userMessage;
                 errorMessage.title = err.message; // Store full message in title
-             } else {
-                 alert(userMessage); // Fallback
-             }
+            } else {
+                alert(userMessage); // Fallback
+            }
             cleanUpAudio();
             setState('idle'); // Revert to idle
         }
@@ -212,12 +211,12 @@ const AudioRecorder = (() => {
         if (currentState !== 'recording' || !mediaRecorder || mediaRecorder.state === 'inactive') {
             console.log("Recorder not active or already stopped.");
             if (currentState === 'recording') {
-                 console.warn("Stop requested while UI state is 'recording' but recorder inactive. Resetting.");
-                 cleanUpAudio();
-                 setState('idle');
-                 if (typeof window.electronAPI?.hideWindow === 'function' && !shouldSaveAndProcess) { // Hide only if cancelling
-                     window.electronAPI.hideWindow();
-                 }
+                console.warn("Stop requested while UI state is 'recording' but recorder inactive. Resetting.");
+                cleanUpAudio();
+                setState('idle');
+                if (typeof window.electronAPI?.hideWindow === 'function' && !shouldSaveAndProcess) { // Hide only if cancelling
+                    window.electronAPI.hideWindow();
+                }
             }
             return;
         }
@@ -241,15 +240,15 @@ const AudioRecorder = (() => {
             console.log("MediaRecorder stop requested.");
         } catch (error) {
             console.error("Error calling mediaRecorder.stop():", error);
-             if (errorMessage) {
+            if (errorMessage) {
                 errorMessage.textContent = "Error stopping recorder.";
                 errorMessage.title = error.message;
-             }
+            }
             cleanUpAudio();
             setState('idle');
-             if (typeof window.electronAPI?.hideWindow === 'function') {
+            if (typeof window.electronAPI?.hideWindow === 'function') {
                 window.electronAPI.hideWindow();
-             }
+            }
         }
     }
 
@@ -269,7 +268,7 @@ const AudioRecorder = (() => {
             console.log("Processing recorded data...");
             // State should be 'processing' if we are here
 
-            const finalBlob = new Blob(recordedChunks, { type: currentMimeType || 'audio/webm' });
+            const finalBlob = new Blob(recordedChunks, {type: currentMimeType || 'audio/webm'});
 
             try {
                 const arrayBuffer = await finalBlob.arrayBuffer();
@@ -284,7 +283,7 @@ const AudioRecorder = (() => {
 
                 if (typeof window.electronAPI?.transcribeAudio === 'function') {
                     // Update processing message for clarity
-                    if(processingInfo) processingInfo.textContent = 'Transcribing...';
+                    if (processingInfo) processingInfo.textContent = 'Transcribing...';
 
                     const result = await window.electronAPI.transcribeAudio(lastAudioBuffer);
 
@@ -305,23 +304,23 @@ const AudioRecorder = (() => {
                         cleanUpAudio(); // Clean up stream/context, but keep buffer reference
                     }
                 } else {
-                     throw new Error("Essential API function (transcribeAudio) unavailable!");
+                    throw new Error("Essential API function (transcribeAudio) unavailable!");
                 }
 
             } catch (error) {
                 console.error("Renderer: Error processing Blob or during initial IPC:", error);
-                 if (errorMessage) {
+                if (errorMessage) {
                     errorMessage.textContent = "Error processing audio.";
                     errorMessage.title = error.message;
-                 } else {
-                     alert(`Error processing audio: ${error.message}`); // Fallback
-                 }
+                } else {
+                    alert(`Error processing audio: ${error.message}`); // Fallback
+                }
                 cleanUpAudio();
                 lastAudioBuffer = null; // Clear buffer on local error
-                 if (typeof window.electronAPI?.hideWindow === 'function') {
-                     window.electronAPI.hideWindow();
-                 }
-                 setState('idle');
+                if (typeof window.electronAPI?.hideWindow === 'function') {
+                    window.electronAPI.hideWindow();
+                }
+                setState('idle');
             }
 
         } else {
@@ -332,8 +331,8 @@ const AudioRecorder = (() => {
             recordedChunks = [];
 
             if (typeof window.electronAPI?.hideWindow === 'function') {
-                 console.log("Renderer: Requesting window hide after cancel/no data.");
-                 window.electronAPI.hideWindow();
+                console.log("Renderer: Requesting window hide after cancel/no data.");
+                window.electronAPI.hideWindow();
             }
             setState('idle'); // Go directly to idle
         }
@@ -344,26 +343,26 @@ const AudioRecorder = (() => {
     async function handleRetry() {
         console.log("Renderer: Retry button clicked.");
         if (currentState !== 'error' || !lastAudioBuffer) {
-             console.warn(`Cannot retry. State: ${currentState}, Buffer available: ${!!lastAudioBuffer}`);
-             if (!lastAudioBuffer && errorMessage) {
-                 errorMessage.textContent = "Cannot retry: Audio data lost.";
-                 errorMessage.title = "Cannot retry: Audio data lost.";
-             }
-             // Do not change state if already not in error
-             return;
+            console.warn(`Cannot retry. State: ${currentState}, Buffer available: ${!!lastAudioBuffer}`);
+            if (!lastAudioBuffer && errorMessage) {
+                errorMessage.textContent = "Cannot retry: Audio data lost.";
+                errorMessage.title = "Cannot retry: Audio data lost.";
+            }
+            // Do not change state if already not in error
+            return;
         }
         if (typeof window.electronAPI?.transcribeAudio !== 'function') {
             console.error("Retry failed: Transcription API unavailable.");
-             if(errorMessage) {
-                 errorMessage.textContent = "Retry failed: API unavailable.";
-                 errorMessage.title = "Retry failed: API unavailable.";
-             }
-             setState('error'); // Stay in error state
+            if (errorMessage) {
+                errorMessage.textContent = "Retry failed: API unavailable.";
+                errorMessage.title = "Retry failed: API unavailable.";
+            }
+            setState('error'); // Stay in error state
             return;
         }
 
         setState('processing'); // Show spinner while retrying
-        if(processingInfo) processingInfo.textContent = 'Retrying transcription...';
+        if (processingInfo) processingInfo.textContent = 'Retrying transcription...';
 
         try {
             console.log(`Renderer: Retrying transcription with ${lastAudioBuffer.byteLength} bytes.`);
@@ -386,16 +385,16 @@ const AudioRecorder = (() => {
             }
         } catch (ipcError) {
             console.error("Renderer: Error invoking transcription IPC during retry:", ipcError);
-             if(errorMessage) {
-                 errorMessage.textContent = "Comms error during retry.";
-                 errorMessage.title = ipcError.message;
-             }
+            if (errorMessage) {
+                errorMessage.textContent = "Comms error during retry.";
+                errorMessage.title = ipcError.message;
+            }
             setState('error'); // Revert to error state
         } finally {
-             // Clear processing message if we are no longer processing (i.e., back in error state)
-             if (currentState === 'error' && processingInfo) {
-                 processingInfo.textContent = '';
-             }
+            // Clear processing message if we are no longer processing (i.e., back in error state)
+            if (currentState === 'error' && processingInfo) {
+                processingInfo.textContent = '';
+            }
         }
     }
 
@@ -407,9 +406,9 @@ const AudioRecorder = (() => {
             window.electronAPI.cancelRetry(); // Tell main to delete file and hide
         } else {
             console.error("Renderer: cancelRetry API function unavailable!");
-             if (typeof window.electronAPI?.hideWindow === 'function') {
-                 window.electronAPI.hideWindow(); // Attempt to hide manually
-             }
+            if (typeof window.electronAPI?.hideWindow === 'function') {
+                window.electronAPI.hideWindow(); // Attempt to hide manually
+            }
         }
         lastAudioBuffer = null; // Clear the buffer
         cleanUpAudio(); // Clean up renderer resources
@@ -420,4 +419,156 @@ const AudioRecorder = (() => {
     function handleFfmpegProgress(data) {
         console.log("Renderer: Received ffmpeg progress:", data);
         // Only display if we are currently in the processing state
-        if (currentState === 'processing' && processingInfo && data)
+        if (currentState === 'processing' && processingInfo && data) { // Scoping the constants
+            const {originalFormatted, convertedFormatted, reductionPercent} = data;
+            // Example: "WebM: 1.2MB -> MP3: 180KB (85% smaller)"
+            // Or just the reduction: "Size reduced by 85%"
+            processingInfo.textContent = `${originalFormatted} -> ${convertedFormatted} (${reductionPercent}% smaller)`;
+        }
+    }
+
+    // --- Shortcut/Trigger Handlers ---
+    function handleTriggerStart() {
+        console.log("Renderer: Received trigger-start-recording.");
+        if (currentState === 'idle') {
+            startRecording();
+        } else if (currentState === 'error') {
+            // If shortcut pressed in error state, treat as cancel
+            console.log("Renderer: Start trigger received in error state. Interpreting as cancel.");
+            handleCancelError();
+        } else {
+            console.warn("Renderer: Ignoring trigger-start as state is not idle or error:", currentState);
+        }
+    }
+
+    function handleTriggerStop(shouldSave) {
+        console.log(`Renderer: Received trigger-stop-recording (save: ${shouldSave}). Current state: ${currentState}`);
+        if (currentState === 'recording') {
+            stopRecording(shouldSave);
+        } else if (currentState === 'error') {
+            // If shortcut pressed again in error state, also treat as cancel
+            console.log("Renderer: Stop trigger received in error state. Interpreting as cancel.");
+            handleCancelError();
+        } else {
+            console.warn("Renderer: Ignoring trigger-stop as state is not recording or error:", currentState);
+            // If triggered while idle/processing, potentially hide if visible
+            if (currentState === 'idle' || currentState === 'processing') {
+                if (typeof window.electronAPI?.hideWindow === 'function') {
+                    console.log("Renderer: Requesting window hide because stop triggered while not recording/error.");
+                    window.electronAPI.hideWindow();
+                }
+            }
+        }
+    }
+
+    // --- Cleanup ---
+    function cleanUpAudio() {
+        console.log("Cleaning up audio resources...");
+        // Stop tracks if mediaStream exists
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => {
+                track.stop();
+                // console.log("Track stopped during cleanup:", track.kind);
+            });
+            mediaStream = null;
+            // console.log("MediaStream tracks stopped.");
+        }
+
+        // Disconnect and nullify audio nodes
+        if (sourceNode) {
+            try {
+                sourceNode.disconnect();
+            } catch (e) {
+            }
+            sourceNode = null;
+        }
+        if (analyserNode) {
+            try {
+                analyserNode.disconnect();
+            } catch (e) {
+            }
+            analyserNode = null;
+        }
+        // Close audio context
+        if (audioContext && audioContext.state !== 'closed') {
+            audioContext.close().then(() => {
+                // console.log("AudioContext closed.");
+            }).catch(e => console.warn("Error closing AudioContext:", e));
+            audioContext = null;
+        }
+        // Release MediaRecorder instance
+        if (mediaRecorder) {
+            // Make sure onstop isn't called again during cleanup if stop() failed earlier
+            mediaRecorder.ondataavailable = null;
+            mediaRecorder.onstop = null;
+            mediaRecorder.onerror = null;
+            // Check state before trying to stop again, might already be inactive
+            if (mediaRecorder.state === 'recording' || mediaRecorder.state === 'paused') {
+                try {
+                    mediaRecorder.stop(); // Attempt a final stop if needed
+                    console.log("MediaRecorder stopped during cleanup.");
+                } catch (e) {
+                    console.warn("Error stopping MediaRecorder during cleanup:", e);
+                }
+            }
+            mediaRecorder = null;
+            // console.log("MediaRecorder instance released.");
+        }
+
+        // Clear flags and visual elements
+        isRecording = false;
+        stopVisualization();
+        stopTimer();
+        // Don't clear recordedChunks here, handleStop manages that after potential processing
+
+        console.log("Audio cleanup complete.");
+    }
+
+    // --- Visualization ---
+    function visualize() {
+        if (!analyserNode || currentState !== 'recording') {
+            stopVisualization();
+            return;
+        }
+
+        const bufferLength = analyserNode.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        try { // Add try/catch as analyserNode might become invalid
+            analyserNode.getByteFrequencyData(dataArray);
+        } catch (error) {
+            console.warn("Error getting frequency data, stopping visualization:", error);
+            stopVisualization();
+            return;
+        }
+
+
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+        }
+        const average = bufferLength > 0 ? sum / bufferLength : 0;
+        const normalizedAmplitude = Math.min(1.0, Math.max(0, (average / 128.0) * 1.5));
+
+        waveformHistory.push(normalizedAmplitude);
+        if (waveformHistory.length > WAVEFORM_BAR_COUNT) {
+            waveformHistory.shift();
+        }
+
+        drawWaveform(recordingCanvas, waveformHistory);
+
+        animationFrameId = requestAnimationFrame(visualize);
+    }
+
+    function stopVisualization() {
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
+            animationFrameId = null;
+        }
+        if (recordingCanvas) {
+            const ctx = recordingCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, recordingCanvas.width, recordingCanvas.height);
+            }
+        }
+    }
+});

@@ -161,9 +161,9 @@ if (!gotTheLock) {
         mainWindow.loadFile('index.html');
 
         // Optional: Open DevTools automatically if not packaged
-        // if (!app.isPackaged) {
-        //     mainWindow.webContents.openDevTools({ mode: 'detach' });
-        // }
+        if (!app.isPackaged) {
+            mainWindow.webContents.openDevTools({ mode: 'detach' });
+        }
 
         mainWindow.on('closed', () => {
             mainWindow = null;
