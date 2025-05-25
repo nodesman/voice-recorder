@@ -3,17 +3,17 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
     /**
-     * Sends audio data (as Uint8Array) to the main process for transcription & copying.
+     * Sends audio data (as Uint8Array) to the main process for transcription.
      * Returns a Promise that resolves with { success: true } or { success: false, error: '...', retryable?: boolean }.
      */
-    transcribeAndCopy: (audioDataUint8Array) => { // Renamed function
+    transcribeAudio: (audioDataUint8Array) => { // Renamed to match renderer expectation
         if (!audioDataUint8Array || !(audioDataUint8Array instanceof Uint8Array)) {
-             console.error("Preload: transcribeAndCopy expects a Uint8Array.");
+             console.error("Preload: transcribeAudio expects a Uint8Array.");
              return Promise.resolve({ success: false, error: "Invalid audio data format sent from renderer." });
         }
         console.log(`Preload: Sending ${audioDataUint8Array.length} bytes to main process via IPC ('transcribe-audio').`);
         // Use invoke for handling asynchronous request/response with main process
-        // Note: Channel name 'transcribe-audio' kept for simplicity, but could be renamed too.
+        // Note: IPC channel name 'transcribe-audio' is handled by main.js
         return ipcRenderer.invoke('transcribe-audio', audioDataUint8Array);
     },
 
@@ -42,7 +42,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.send('cancel-retry'); // Use send for one-way command
     },
 
-
     /**
      * Listens for a trigger from the main process to start recording.
      * @param {function} callback - The function to call when the trigger is received.
@@ -60,7 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     /**
      * Listens for progress updates from the ffmpeg process in main.
-     * @param {function} callback - Function to call with data { originalSize, convertedSize }.
+     * @param {function} callback - Function to call with data { originalSize, convertedSize, ... }.
      * @returns {function} A function to remove the listener.
      */
     onFfmpegProgress: (callback) => {
@@ -84,7 +83,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
          ipcRenderer.on('trigger-stop-recording', handler);
          // Return a cleanup function
          return () => ipcRenderer.removeListener('trigger-stop-recording', handler);
-     }
+     },
+     /**
+      * Listens for a trigger from the main process to reset UI from error state (e.g., after a cancel).
+      * @param {function} callback - The function to call when the trigger is received.
+      * @returns {function} A function to remove the listener.
+      */
+    onCancelRetryUI: (callback) => {
+        const handler = (_event) => {
+            console.log("Preload: Received cancel-retry-ui event.");
+            callback();
+        };
+        ipcRenderer.on('cancel-retry-ui', handler);
+        return () => ipcRenderer.removeListener('cancel-retry-ui', handler);
+    }
 });
 
-console.log('Preload script executed. API:', Object.keys(window.electronAPI || {}));
+console.log('Preload script executed. API exposed:', Object.keys(window.electronAPI || {}));
