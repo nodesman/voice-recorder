@@ -7,7 +7,8 @@ if (typeof window.electronAPI?.transcribeAudio !== 'function' || // Adjusted API
     typeof window.electronAPI?.onTriggerStartRecording !== 'function' ||
     typeof window.electronAPI?.onTriggerStopRecording !== 'function' ||
     typeof window.electronAPI?.onFfmpegProgress !== 'function' ||
-    typeof window.electronAPI?.cancelRetry !== 'function') {
+    typeof window.electronAPI?.cancelRetry !== 'function' ||
+    typeof window.electronAPI?.retryTranscription !== 'function') { // Added retryTranscription check
     console.error("Electron API functions missing! Check preload script (ensure transcribeAudio, cancelRetry are exposed), contextIsolation, and main process IPC handlers.");
     // alert("Critical Error: Cannot communicate with the main process correctly. Functionality may be broken. Please check logs or restart.");
     // Gracefully degrade: disable the mic button if core functionality is missing
@@ -84,7 +85,8 @@ const AudioRecorder = (() => {
             typeof window.electronAPI?.onTriggerStartRecording === 'function' &&
             typeof window.electronAPI?.onTriggerStopRecording === 'function' &&
             typeof window.electronAPI?.onFfmpegProgress === 'function' &&
-            typeof window.electronAPI?.cancelRetry === 'function') {
+            typeof window.electronAPI?.cancelRetry === 'function' &&
+            typeof window.electronAPI?.retryTranscription === 'function') { // Added retryTranscription check
 
             micButton.addEventListener('click', startRecording);
             cancelRecordingButton.addEventListener('click', () => stopRecording(false));
@@ -279,29 +281,39 @@ const AudioRecorder = (() => {
                     throw new Error("Recorded audio data is empty after processing.");
                 }
 
-                console.log(`Renderer: Sending ${lastAudioBuffer.byteLength} bytes for initial transcription.`);
+                const audioDataUint8Array = new Uint8Array(lastAudioBuffer); // Convert ArrayBuffer to Uint8Array
+                console.log(`Renderer: Sending ${audioDataUint8Array.length} bytes for initial transcription.`);
 
                 if (typeof window.electronAPI?.transcribeAudio === 'function') {
                     // Update processing message for clarity
                     if (processingInfo) processingInfo.textContent = 'Transcribing...';
 
-                    const result = await window.electronAPI.transcribeAudio(lastAudioBuffer);
+                    const result = await window.electronAPI.transcribeAudio(audioDataUint8Array); // Pass Uint8Array
 
-                    // Handle result object { success: boolean, error?: string }
+                    // Handle result object { success: boolean, error?: string, retryable?: boolean }
                     if (result?.success) {
                         console.log("Renderer: Main process reported success.");
                         cleanUpAudio();
                         lastAudioBuffer = null; // Clear buffer on success
                         setState('idle');
                         // Main process hides window automatically on success
-                    } else {
-                        // Transcription failed
-                        console.error("Renderer: Main process reported error:", result?.error || "Unknown transcription error");
+                    } else if (result?.retryable) {
+                        // Transcription failed, but is retryable
+                        console.error("Renderer: Main process reported retryable error:", result?.error);
                         errorMessage.textContent = result?.error || 'Transcription failed. Retry?';
                         errorMessage.title = result?.error || 'Transcription failed. Retry?';
                         setState('error'); // Transition to error state
-                        // DO NOT clear lastAudioBuffer
-                        cleanUpAudio(); // Clean up stream/context, but keep buffer reference
+                        // DO NOT clear lastAudioBuffer (main.js has the MP3 for retry)
+                        cleanUpAudio(); // Clean up stream/context, but main keeps the MP3
+                    } else {
+                        // Transcription failed, non-retryable
+                        console.error("Renderer: Main process reported non-retryable error:", result?.error);
+                        errorMessage.textContent = result?.error || 'Transcription failed.';
+                        errorMessage.title = result?.error || 'Transcription failed.';
+                        // Main process handles any dialogs for critical non-retryable errors.
+                        // We still go to 'error' state to show the message, user can then cancel to hide.
+                        setState('error');
+                        cleanUpAudio(); // Clean up stream/context
                     }
                 } else {
                     throw new Error("Essential API function (transcribeAudio) unavailable!");
@@ -341,17 +353,14 @@ const AudioRecorder = (() => {
     // --- NEW: Error State Handling ---
 
     async function handleRetry() {
-        console.log("Renderer: Retry button clicked.");
-        if (currentState !== 'error' || !lastAudioBuffer) {
-            console.warn(`Cannot retry. State: ${currentState}, Buffer available: ${!!lastAudioBuffer}`);
-            if (!lastAudioBuffer && errorMessage) {
-                errorMessage.textContent = "Cannot retry: Audio data lost.";
-                errorMessage.title = "Cannot retry: Audio data lost.";
-            }
-            // Do not change state if already not in error
+        console.log("Renderer: Retry button clicked. Requesting file-based retry from main process.");
+        if (currentState !== 'error') {
+            console.warn(`Cannot retry. State is not 'error': ${currentState}`);
             return;
         }
-        if (typeof window.electronAPI?.transcribeAudio !== 'function') {
+        // No need to check lastAudioBuffer here, main.js uses its own stored file.
+        if (typeof window.electronAPI?.retryTranscription !== 'function') {
+            // Do not change state if already not in error
             console.error("Retry failed: Transcription API unavailable.");
             if (errorMessage) {
                 errorMessage.textContent = "Retry failed: API unavailable.";
@@ -365,23 +374,30 @@ const AudioRecorder = (() => {
         if (processingInfo) processingInfo.textContent = 'Retrying transcription...';
 
         try {
-            console.log(`Renderer: Retrying transcription with ${lastAudioBuffer.byteLength} bytes.`);
-            const result = await window.electronAPI.transcribeAudio(lastAudioBuffer);
+            // Call the main process's file-based retry mechanism
+            const result = await window.electronAPI.retryTranscription();
 
-            // Handle result object { success: boolean, error?: string }
+            // Handle result object { success: boolean, error?: string, retryable?: boolean }
             if (result?.success) {
                 console.log("Renderer: Retry successful.");
                 cleanUpAudio();
                 lastAudioBuffer = null; // Clear buffer on success
                 setState('idle');
                 // Main process should hide window on success
-            } else {
-                // Retry failed again
-                console.error("Renderer: Retry failed.", result?.error);
+            } else if (result?.retryable) {
+                // Retry failed, but is still retryable
+                console.error("Renderer: Retry failed, but still retryable.", result?.error);
                 errorMessage.textContent = result?.error || 'Retry failed. Try again?';
                 errorMessage.title = result?.error || 'Retry failed. Try again?';
-                setState('error'); // Stay in error state
-                // DO NOT clear buffer
+                setState('error'); // Stay in error state for another attempt
+                // DO NOT clear lastAudioBuffer (main.js handles its file)
+            } else {
+                // Retry failed with a non-retryable error
+                console.error("Renderer: Retry failed with non-retryable error.", result?.error);
+                errorMessage.textContent = result?.error || 'Retry failed permanently.';
+                errorMessage.title = result?.error || 'Retry failed permanently.';
+                setState('error'); // Stay in error state, user must cancel
+                // Main process would handle final dialogs and its temp file cleanup.
             }
         } catch (ipcError) {
             console.error("Renderer: Error invoking transcription IPC during retry:", ipcError);
@@ -569,6 +585,80 @@ const AudioRecorder = (() => {
             if (ctx) {
                 ctx.clearRect(0, 0, recordingCanvas.width, recordingCanvas.height);
             }
+        }
+    }
+
+    // --- Timer ---
+    function startTimer() {
+        if (timerIntervalId) clearInterval(timerIntervalId);
+        timerDisplay.textContent = "0:00";
+        const startTime = Date.now();
+        timerIntervalId = setInterval(() => {
+            const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+            const minutes = Math.floor(elapsedTime / 60);
+            const seconds = elapsedTime % 60;
+            timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }, 1000);
+    }
+
+    function stopTimer() {
+        if (timerIntervalId) {
+            clearInterval(timerIntervalId);
+            timerIntervalId = null;
+        }
+        if (timerDisplay) timerDisplay.textContent = "0:00";
+    }
+
+    // --- Waveform Drawing ---
+    function drawWaveform(canvas, history) {
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const width = canvas.width;
+        const height = canvas.height;
+        ctx.clearRect(0, 0, width, height);
+
+        const barWidth = width / WAVEFORM_BAR_COUNT;
+        const barColor = 'rgba(200, 200, 200, 0.6)'; // Lighter, slightly transparent bars
+        const centerLineColor = 'rgba(150, 150, 150, 0.3)'; // Fainter center line
+
+        // Draw center line
+        ctx.beginPath();
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
+        ctx.strokeStyle = centerLineColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Draw bars
+        for (let i = 0; i < WAVEFORM_BAR_COUNT; i++) {
+            const x = i * barWidth;
+            const amplitude = history[i] || 0; // Default to 0 if undefined
+            const barHeight = Math.max(1, amplitude * height * 0.8); // Ensure min height of 1px
+
+            ctx.fillStyle = barColor;
+            ctx.fillRect(x, (height - barHeight) / 2, barWidth - 1, barHeight); // -1 for spacing
+        }
+    }
+
+    // --- Public API ---
+    return {
+        init
+    };
+})();
+
+// --- DOM Ready ---
+document.addEventListener('DOMContentLoaded', () => {
+    if (typeof AudioRecorder?.init === 'function') {
+        AudioRecorder.init();
+        console.log("DOM fully loaded and parsed, AudioRecorder.init() called.");
+    } else {
+        console.error("AudioRecorder or its init function is not available on DOMContentLoaded.");
+        const errDisp = document.getElementById('errorMessage');
+        if (errDisp) {
+             errDisp.textContent = "Critical Error: Recorder module failed to load.";
+             errDisp.style.display = 'block';
         }
     }
 });
